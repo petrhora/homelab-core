@@ -1,0 +1,17 @@
+[Unit]
+Description=homelab-core local homelab agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/homelab-core
+Restart=on-failure
+RestartSec=5
+User=homelab
+Group=homelab
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
