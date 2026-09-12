@@ -10,6 +10,7 @@ Restart=on-failure
 RestartSec=5
 User=homelab
 Group=homelab
+SupplementaryGroups=spi
 NoNewPrivileges=true
 PrivateTmp=true
 

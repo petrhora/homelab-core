@@ -19,6 +19,7 @@ def test_default_config(tmp_path):
     config = load_config(tmp_path / "missing.toml")
     assert config.api.host == "127.0.0.1"
     assert config.api.port == 8000
+    assert config.rgb.led_count == 4
 
 
 def test_unknown_config_is_rejected(tmp_path):

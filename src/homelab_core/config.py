@@ -33,7 +33,7 @@ class RgbConfig(BaseModel):
     enabled: bool = False
     device: Literal["ws2812"] = "ws2812"
     spi_path: str = "/dev/spidev0.0"
-    led_count: int = Field(default=60, ge=1, le=1024)
+    led_count: int = Field(default=4, ge=1, le=1024)
     brightness: float = Field(default=1.0, ge=0, le=1)
     color: RgbColor = "#FFFFFF"
     spi_speed_hz: int = Field(default=2_400_000, ge=100_000, le=20_000_000)

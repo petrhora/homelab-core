@@ -31,7 +31,7 @@ and create `/etc/homelab-core/config.toml`:
 enabled = true
 device = "ws2812"
 spi_path = "/dev/spidev0.0"
-led_count = 60
+led_count = 4
 brightness = 0.25
 color = "#00FF00"
 spi_speed_hz = 2400000
