@@ -15,7 +15,14 @@ async def test_read_only_api():
             response = await client.get("/api/v1/health")
             assert response.status_code == 200
             assert response.json()["managers"]["system"]["status"] == "ready"
+            assert response.json()["managers"]["rgb"]["status"] == "ready"
             assert (await client.get("/api/v1/overview")).status_code == 200
+            rgb = await client.get("/api/v1/rgb")
+            assert rgb.status_code == 200
+            update = await client.post("/api/v1/rgb", json={"enabled": False, "color": "#112233"})
+            assert update.status_code == 200
+            assert update.json()["desired"]["color"] == "#112233"
+            assert (await client.post("/api/v1/rgb", json={"color": "blue"})).status_code == 422
             assert "homelab_cpu_usage_ratio" in (await client.get("/metrics")).text
     finally:
         await supervisor.stop()

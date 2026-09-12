@@ -1,8 +1,12 @@
 from pathlib import Path
 import os
 import tomllib
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+
+
+RgbColor = Annotated[str, StringConstraints(pattern=r"^#[0-9A-Fa-f]{6}$")]
 
 
 class ApiConfig(BaseModel):
@@ -24,11 +28,23 @@ class SystemConfig(BaseModel):
     poll_interval_seconds: float = Field(default=5.0, gt=0, le=3600)
 
 
+class RgbConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    device: Literal["ws2812"] = "ws2812"
+    spi_path: str = "/dev/spidev0.0"
+    led_count: int = Field(default=60, ge=1, le=1024)
+    brightness: float = Field(default=1.0, ge=0, le=1)
+    color: RgbColor = "#FFFFFF"
+    spi_speed_hz: int = Field(default=2_400_000, ge=100_000, le=20_000_000)
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     api: ApiConfig = ApiConfig()
     logging: LoggingConfig = LoggingConfig()
     system: SystemConfig = SystemConfig()
+    rgb: RgbConfig = RgbConfig()
     metrics_enabled: bool = True
 
 
