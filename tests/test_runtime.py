@@ -1,4 +1,6 @@
 import asyncio
+import sys
+import types
 
 import pytest
 
@@ -39,6 +41,58 @@ def test_lowercase_rgb_color_is_accepted(tmp_path):
     path.write_text('[rgb]\ncolor = "#a1b2c3"\n')
 
     assert load_config(path).rgb.color == "#a1b2c3"
+
+
+@pytest.mark.asyncio
+async def test_ws2812_clear_opens_spi_and_sends_configured_pixel_count(monkeypatch):
+    class Spi:
+        def __init__(self):
+            self.frames = []
+
+        def open(self, bus, device):
+            self.opened = (bus, device)
+
+        def xfer2(self, payload):
+            self.frames.append(payload)
+
+        def close(self):
+            self.closed = True
+
+    spi = Spi()
+    monkeypatch.setitem(sys.modules, "spidev", types.SimpleNamespace(SpiDev=lambda: spi))
+
+    device = Ws2812SpiDevice("/dev/spidev0.0", 2_400_000, pixel_count=2)
+    await device.clear()
+
+    assert spi.opened == (0, 0)
+    assert len(spi.frames) == 1
+    assert len(spi.frames[0]) == 24 + (2 * 9) + 24
+
+
+@pytest.mark.asyncio
+async def test_ws2812_clear_blanks_previous_larger_frame_after_count_reduction(monkeypatch):
+    class Spi:
+        def __init__(self):
+            self.frames = []
+
+        def open(self, bus, device):
+            pass
+
+        def xfer2(self, payload):
+            self.frames.append(payload)
+
+        def close(self):
+            pass
+
+    spi = Spi()
+    monkeypatch.setitem(sys.modules, "spidev", types.SimpleNamespace(SpiDev=lambda: spi))
+
+    device = Ws2812SpiDevice("/dev/spidev0.0", 2_400_000, pixel_count=2)
+    await device.set_pixels([(255, 0, 0)] * 4)
+    await device.set_pixels([(0, 255, 0)] * 2)
+    await device.clear()
+
+    assert len(spi.frames[-1]) == 24 + (4 * 9) + 24
 
 
 @pytest.mark.asyncio

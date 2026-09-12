@@ -18,7 +18,7 @@ class RgbManager(Manager):
     def __init__(self, config: RgbConfig, state: StateStore, device: RgbDevice | None = None) -> None:
         self.config = config
         self.state = state
-        self.device = device or Ws2812SpiDevice(config.spi_path, config.spi_speed_hz)
+        self.device = device or Ws2812SpiDevice(config.spi_path, config.spi_speed_hz, config.led_count)
         self._status = ManagerStatus.STARTING
         self._error: str | None = None
         self._enabled = config.enabled

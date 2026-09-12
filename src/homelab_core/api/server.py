@@ -63,6 +63,8 @@ def create_app(supervisor: Supervisor, metrics_enabled: bool = True) -> FastAPI:
             return await supervisor.commands.dispatch("rgb.update", update.model_dump(exclude_none=True))
         except (ValueError, TimeoutError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
 
     @app.get("/metrics")
     async def metrics(request: Request) -> Response:
