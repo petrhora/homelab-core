@@ -1,8 +1,12 @@
+import asyncio
+import contextlib
 import logging
-from typing import Any, Sequence
+import time
+from typing import Any
 
 from ..config import RgbConfig
 from ..devices.interfaces import RgbDevice, RgbPixel
+from ..rgb_patterns import Pattern, apply_brightness, normalize_pattern, pattern_to_payload
 from ..devices.ws2812 import Ws2812SpiDevice
 from ..runtime.commands import Command
 from ..runtime.state import StateStore, utc_now
@@ -25,6 +29,9 @@ class RgbManager(Manager):
         self._brightness = config.brightness
         self._color = self.parse_color(config.color)
         self._led_count = config.led_count
+        self._pattern: Pattern = normalize_pattern(None, self._led_count, self._color)
+        self._animation_task: asyncio.Task[None] | None = None
+        self._pattern_started_at = time.monotonic()
         self._actual: dict[str, Any] | None = None
         self._last_operation: str | None = None
         self._last_operation_at: str | None = None
@@ -36,6 +43,7 @@ class RgbManager(Manager):
         try:
             if self._enabled:
                 self._actual = await self._apply()
+                self._start_animation()
             else:
                 await self.device.clear()
                 self._actual = self._off_state()
@@ -47,6 +55,7 @@ class RgbManager(Manager):
         await self._publish()
 
     async def stop(self) -> None:
+        await self._stop_animation()
         try:
             try:
                 await self.device.clear()
@@ -81,10 +90,12 @@ class RgbManager(Manager):
         color = self._color
         brightness = self._brightness
         led_count = self._led_count
+        pattern_payload: dict[str, Any] | None = pattern_to_payload(self._pattern)
         if "enabled" in payload:
             enabled = bool(payload["enabled"])
         if "color" in payload:
             color = self.parse_color(payload["color"])
+            pattern_payload = {"type": "solid", "color": payload["color"]}
         if "brightness" in payload:
             value = payload["brightness"]
             if not isinstance(value, (int, float)) or not 0 <= value <= 1:
@@ -97,14 +108,25 @@ class RgbManager(Manager):
             led_count = count
         if payload.get("clear"):
             color = (0, 0, 0)
+            pattern_payload = {"type": "solid", "color": "#000000"}
 
-        self._enabled = enabled
-        self._color = color
-        self._brightness = brightness
-        self._led_count = led_count
+        if "pattern" in payload:
+            if "color" in payload or payload.get("clear"):
+                raise ValueError("pattern cannot be combined with color or clear")
+            pattern_payload = payload["pattern"]
+        candidate_pattern = normalize_pattern(pattern_payload, led_count, color)
+
         try:
+            await self._stop_animation()
+            self._enabled = enabled
+            self._color = color
+            self._brightness = brightness
+            self._led_count = led_count
+            self._pattern = candidate_pattern
+            self._pattern_started_at = time.monotonic()
             if self._enabled:
                 self._actual = await self._apply()
+                self._start_animation()
             else:
                 await self.device.clear()
                 self._actual = self._off_state()
@@ -119,13 +141,33 @@ class RgbManager(Manager):
         return await self._state()
 
     async def _apply(self) -> dict[str, Any]:
-        scaled: RgbPixel = (
-            round(self._color[0] * self._brightness),
-            round(self._color[1] * self._brightness),
-            round(self._color[2] * self._brightness),
-        )
-        await self.device.set_pixels([scaled] * self._led_count)
-        return {"enabled": True, "color": "#%02X%02X%02X" % scaled, "led_count": self._led_count}
+        frame = apply_brightness(self._pattern.render(self._led_count, 0), self._brightness)
+        await self.device.set_pixels(frame)
+        return {"enabled": True, "color": "#%02X%02X%02X" % frame[0], "led_count": self._led_count,
+                "pattern": pattern_to_payload(self._pattern)}
+
+    def _start_animation(self) -> None:
+        if self._pattern.type != "solid":
+            self._animation_task = asyncio.create_task(self._animate())
+
+    async def _stop_animation(self) -> None:
+        if self._animation_task is None:
+            return
+        task = self._animation_task
+        self._animation_task = None
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    async def _animate(self) -> None:
+        try:
+            while True:
+                elapsed = time.monotonic() - self._pattern_started_at
+                frame = apply_brightness(self._pattern.render(self._led_count, elapsed), self._brightness)
+                await self.device.set_pixels(frame)
+                await asyncio.sleep(1 / 30)
+        except asyncio.CancelledError:
+            raise
 
     def _off_state(self) -> dict[str, Any]:
         return {"enabled": False, "color": "#000000", "led_count": self._led_count}
@@ -149,7 +191,8 @@ class RgbManager(Manager):
 
     async def _state(self) -> dict[str, Any]:
         return {"desired": {"enabled": self._enabled, "color": "#%02X%02X%02X" % self._color,
-                             "brightness": self._brightness, "led_count": self._led_count},
+                             "brightness": self._brightness, "led_count": self._led_count,
+                             "pattern": pattern_to_payload(self._pattern)},
                 "actual": self._actual, "operation": {"last": self._last_operation,
                 "at": self._last_operation_at, "last_success_at": self._last_success_at,
                 "last_error_at": self._last_error_at, "error": self._error,

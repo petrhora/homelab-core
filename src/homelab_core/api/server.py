@@ -1,9 +1,73 @@
+from typing import Annotated, Literal
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Gauge, generate_latest
 
 from ..runtime.supervisor import Supervisor
+
+
+class RgbPixelUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    color: str
+    brightness: float = Field(default=1.0, ge=0, le=1)
+
+    @field_validator("color")
+    @classmethod
+    def validate_color(cls, value: str) -> str:
+        return _validate_color(value)
+
+
+class PatternSourceUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    color: str | None = None
+    pixels: list[str | RgbPixelUpdate] | None = None
+
+    @field_validator("color")
+    @classmethod
+    def validate_color(cls, value: str | None) -> str | None:
+        return _validate_color(value) if value is not None else None
+
+
+class SolidPatternUpdate(PatternSourceUpdate):
+    type: Literal["solid"] = "solid"
+
+
+class BreathingPatternUpdate(PatternSourceUpdate):
+    type: Literal["breathing"] = "breathing"
+    period_ms: int = Field(default=2000, ge=100)
+    min_intensity: float = Field(default=0, ge=0, le=1)
+    max_intensity: float = Field(default=1, ge=0, le=1)
+
+
+class FlowPatternUpdate(PatternSourceUpdate):
+    type: Literal["flow"] = "flow"
+    speed: float = Field(default=1, ge=0)
+    direction: Literal["forward", "reverse"] = "forward"
+
+
+class RainbowPatternUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["rainbow"] = "rainbow"
+    speed: float = Field(default=0.1, ge=0)
+    direction: Literal["forward", "reverse"] = "forward"
+    saturation: float = Field(default=1, ge=0, le=1)
+    brightness: float = Field(default=1, ge=0, le=1)
+
+
+class HueCyclePatternUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["hue_cycle"] = "hue_cycle"
+    speed: float = Field(default=0.1, ge=0)
+    saturation: float = Field(default=1, ge=0, le=1)
+    brightness: float = Field(default=1, ge=0, le=1)
+
+
+PatternUpdate = Annotated[
+    SolidPatternUpdate | BreathingPatternUpdate | FlowPatternUpdate | RainbowPatternUpdate | HueCyclePatternUpdate,
+    Field(discriminator="type"),
+]
 
 
 class RgbUpdate(BaseModel):
@@ -13,18 +77,22 @@ class RgbUpdate(BaseModel):
     brightness: float | None = Field(default=None, ge=0, le=1)
     led_count: int | None = Field(default=None, ge=1, le=1024)
     clear: bool = False
+    pattern: PatternUpdate | None = None
 
     @field_validator("color")
     @classmethod
     def validate_color(cls, value: str | None) -> str | None:
-        if value is not None and (len(value) != 7 or not value.startswith("#")):
-            raise ValueError("color must be in #RRGGBB format")
-        if value is not None:
-            try:
-                int(value[1:], 16)
-            except ValueError:
-                raise ValueError("color must be in #RRGGBB format") from None
-        return value
+        return _validate_color(value) if value is not None else None
+
+
+def _validate_color(value: str) -> str:
+    if len(value) != 7 or not value.startswith("#"):
+        raise ValueError("color must be in #RRGGBB format")
+    try:
+        int(value[1:], 16)
+    except ValueError:
+        raise ValueError("color must be in #RRGGBB format") from None
+    return value
 
 
 def create_app(supervisor: Supervisor, metrics_enabled: bool = True) -> FastAPI:

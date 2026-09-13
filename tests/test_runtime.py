@@ -9,6 +9,7 @@ from homelab_core.devices.interfaces import FakeRgbDevice
 from homelab_core.devices.ws2812 import Ws2812SpiDevice
 from homelab_core.managers.base import Manager
 from homelab_core.managers.rgb import RgbManager
+from homelab_core.rgb_patterns import apply_brightness, normalize_pattern
 from homelab_core.runtime.commands import Command, CommandBus
 from homelab_core.runtime.events import Event, EventBus
 from homelab_core.runtime.state import StateStore
@@ -221,6 +222,60 @@ async def test_rgb_applies_brightness_to_all_pixels():
     assert device.pixels == [(64, 32, 16), (64, 32, 16)]
     await manager.stop()
     assert device.closed
+
+
+@pytest.mark.asyncio
+async def test_rgb_solid_supports_per_pixel_colors_and_brightness():
+    state = StateStore()
+    device = FakeRgbDevice()
+    manager = RgbManager(RgbConfig(enabled=False, led_count=3), state, device)
+    await manager.start()
+    result = await manager.execute(Command("rgb.update", "rgb-device", {
+        "enabled": True,
+        "brightness": 0.5,
+        "pattern": {"type": "solid", "pixels": [
+            "#FF0000", {"color": "#00FF00", "brightness": 0.25}, "#0000FF"
+        ]},
+    }, "test", 1))
+
+    assert device.pixels == [(128, 0, 0), (0, 32, 0), (0, 0, 128)]
+    assert result["desired"]["pattern"]["type"] == "solid"
+    await manager.stop()
+
+
+def test_animated_patterns_render_normalized_frames():
+    pattern = normalize_pattern({
+        "type": "breathing", "color": "#804020", "period_ms": 1000,
+        "min_intensity": 0.5, "max_intensity": 1.0,
+    }, 2, (0, 0, 0))
+
+    frame = apply_brightness(pattern.render(2, 0), 1.0)
+
+    assert len(frame) == 2
+    assert frame[0] == (64, 32, 16)
+    assert frame[1] == (64, 32, 16)
+
+
+@pytest.mark.asyncio
+async def test_rgb_starts_and_replaces_animation_task():
+    state = StateStore()
+    device = FakeRgbDevice()
+    manager = RgbManager(RgbConfig(enabled=False, led_count=2), state, device)
+    await manager.start()
+
+    await manager.execute(Command("rgb.update", "rgb-device", {
+        "enabled": True, "pattern": {"type": "rainbow", "speed": 1}
+    }, "test", 1))
+    first_task = manager._animation_task
+    assert first_task is not None
+
+    await manager.execute(Command("rgb.update", "rgb-device", {
+        "pattern": {"type": "solid", "color": "#010203"}
+    }, "test", 1))
+    assert first_task.cancelled()
+    assert manager._animation_task is None
+    assert device.pixels == [(1, 2, 3), (1, 2, 3)]
+    await manager.stop()
 
 
 @pytest.mark.asyncio

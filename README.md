@@ -17,6 +17,8 @@ Endpoints are available at `http://127.0.0.1:8000`:
 - `GET /api/v1/overview`
 - `GET /api/v1/system`
 - `GET /api/v1/system/processes`
+- `GET /api/v1/rgb`
+- `POST /api/v1/rgb`
 - `GET /metrics`
 
 Configuration defaults to `/etc/homelab-core/config.toml`. Use `HOMELAB_CORE_CONFIG`
@@ -42,3 +44,26 @@ enabled and the service account can access `/dev/spidev0.0`. Do not run another
 process that owns the same RGB hardware at the same time.
 
 Run tests with `pytest`.
+
+RGB patterns can use a uniform color or an independently configured pixel frame:
+
+```json
+{
+  "enabled": true,
+  "brightness": 0.5,
+  "pattern": {
+    "type": "solid",
+    "pixels": [
+      "#FF0000",
+      {"color": "#00FF00", "brightness": 0.25},
+      "#0000FF",
+      "#FFFFFF"
+    ]
+  }
+}
+```
+
+Animated pattern types are `breathing`, `flow`, `rainbow`, and `hue_cycle`.
+Animated patterns run at 30 frames per second and are replaced when a new RGB
+command is applied. The existing flat `color` field remains shorthand for a
+uniform `solid` pattern.
