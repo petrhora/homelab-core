@@ -41,7 +41,8 @@ color = "#00FF00"
 spi_speed_hz = 2400000
 ```
 
-Install the adapter dependency with `pip install -e '.[hardware]'`. Ensure SPI is
+Install the adapter dependency with `pip install -e '.[hardware]'`. On Raspberry
+Pi OS, install `liblgpio-dev` first if it is not already present. Ensure SPI is
 enabled and the service account can access `/dev/spidev0.0`. Do not run another
 process that owns the same RGB hardware at the same time.
 
@@ -91,5 +92,7 @@ mode = "on"
 `mode = "on"` keeps fan lighting enabled while the fan motor still follows its
 temperature thresholds. `follow` enables the lighting only while the external
 fan output is on. FAN API updates are runtime-only and reset to these values on
-restart. Install `.[hardware]`, grant the service account GPIO access, and do
-not run the official Pironman service concurrently.
+restart. Install `.[hardware]`, which provides Pi 5-compatible `RPi.GPIO`
+compatibility through `rpi-lgpio`, grant the service account GPIO access, and do
+not run the official Pironman service concurrently. `rpi-lgpio` cannot coexist
+with the legacy `RPi.GPIO` package in one virtual environment.

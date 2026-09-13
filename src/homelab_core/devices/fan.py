@@ -29,7 +29,7 @@ class GpioFanDevice(FanDevice):
             try:
                 from RPi import GPIO
             except ImportError as error:
-                raise RuntimeError("GPIO support requires the RPi.GPIO package") from error
+                raise RuntimeError("GPIO support requires the rpi-lgpio package") from error
             GPIO.setmode(GPIO.BCM)
             GPIO.setup(self.fan_pin, GPIO.OUT,
                        initial=GPIO.LOW if self.fan_active_high else GPIO.HIGH)
