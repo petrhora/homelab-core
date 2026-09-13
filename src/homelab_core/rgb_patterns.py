@@ -152,7 +152,7 @@ def normalize_pattern(payload: Any, led_count: int, fallback_color: RgbPixel) ->
         return SolidPattern(pixels)
     if pattern_type == "breathing":
         pixels = _source_pixels(payload, led_count, fallback_color)
-        period = _number(payload, "period_ms", 2000, integer=True, minimum=100)
+        period = int(_number(payload, "period_ms", 2000, integer=True, minimum=100))
         low = _number(payload, "min_intensity", 0.0, minimum=0, maximum=1)
         high = _number(payload, "max_intensity", 1.0, minimum=0, maximum=1)
         if low > high:
@@ -168,8 +168,8 @@ def normalize_pattern(payload: Any, led_count: int, fallback_color: RgbPixel) ->
         return FlowPattern(pixels, speed, direction, virtual_led_count)
     if pattern_type == "stepper":
         pixels = _source_pixels(payload, led_count, fallback_color)
-        step_leds = _number(payload, "step_leds", 1, integer=True, minimum=1)
-        step_duration_ms = _number(payload, "step_duration_ms", 1000, integer=True, minimum=100)
+        step_leds = int(_number(payload, "step_leds", 1, integer=True, minimum=1))
+        step_duration_ms = int(_number(payload, "step_duration_ms", 1000, integer=True, minimum=100))
         return StepperPattern(pixels, step_leds, step_duration_ms, _direction(payload))
     if pattern_type == "gradient":
         values = payload.get("colors")
@@ -276,8 +276,11 @@ def _interpolate_pixels(pixels: Sequence[PatternPixel], position: float) -> Patt
     fraction = position - lower
     start = pixels[lower % len(pixels)]
     end = pixels[(lower + 1) % len(pixels)]
-    return PatternPixel(tuple(round(start.color[index] + (end.color[index] - start.color[index]) * fraction)
-                              for index in range(3)),
+    return PatternPixel((
+        round(start.color[0] + (end.color[0] - start.color[0]) * fraction),
+        round(start.color[1] + (end.color[1] - start.color[1]) * fraction),
+        round(start.color[2] + (end.color[2] - start.color[2]) * fraction),
+    ),
                         start.brightness + (end.brightness - start.brightness) * fraction)  # type: ignore[arg-type]
 
 
