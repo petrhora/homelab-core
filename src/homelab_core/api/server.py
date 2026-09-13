@@ -1,10 +1,11 @@
 from typing import Annotated, Literal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Gauge, generate_latest
 
+from ..runtime.commands import CommandTimeoutError
 from ..runtime.supervisor import Supervisor
 
 
@@ -85,6 +86,14 @@ class RgbUpdate(BaseModel):
         return _validate_color(value) if value is not None else None
 
 
+class FanUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["off", "on", "auto"] | None = None
+    on_temperature_c: float | None = Field(default=None, ge=0, le=120)
+    off_temperature_c: float | None = Field(default=None, ge=0, le=120)
+    led_mode: Literal["off", "on", "follow"] | None = None
+
+
 def _validate_color(value: str) -> str:
     if len(value) != 7 or not value.startswith("#"):
         raise ValueError("color must be in #RRGGBB format")
@@ -103,6 +112,7 @@ def create_app(supervisor: Supervisor, metrics_enabled: bool = True) -> FastAPI:
     memory_available = Gauge("homelab_memory_available_bytes", "Available memory", registry=registry)
     rgb_enabled = Gauge("homelab_rgb_enabled", "Whether RGB output is enabled", registry=registry)
     rgb_brightness = Gauge("homelab_rgb_brightness", "RGB brightness ratio", registry=registry)
+    fan_state = Gauge("homelab_fan_state", "Whether an external fan output is enabled", ["fan"], registry=registry)
     manager_up = Gauge("homelab_manager_up", "Whether a manager is ready", ["manager"], registry=registry)
 
     @app.get("/api/v1/health")
@@ -118,8 +128,9 @@ def create_app(supervisor: Supervisor, metrics_enabled: bool = True) -> FastAPI:
         return await supervisor.managers["system"].snapshot()
 
     @app.get("/api/v1/system/processes")
-    async def processes() -> list[dict]:
-        return await supervisor.managers["system"].processes()  # type: ignore[attr-defined]
+    async def processes(offset: int = Query(default=0, ge=0, le=10_000),
+                       limit: int = Query(default=100, ge=1, le=500)) -> dict:
+        return await supervisor.managers["system"].processes(offset, limit)  # type: ignore[attr-defined]
 
     @app.get("/api/v1/rgb")
     async def rgb() -> dict:
@@ -129,6 +140,23 @@ def create_app(supervisor: Supervisor, metrics_enabled: bool = True) -> FastAPI:
     async def update_rgb(update: RgbUpdate) -> dict:
         try:
             return await supervisor.commands.dispatch("rgb.update", update.model_dump(exclude_none=True))
+        except CommandTimeoutError as error:
+            raise HTTPException(status_code=504, detail=str(error)) from error
+        except (ValueError, TimeoutError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @app.get("/api/v1/fans")
+    async def fans() -> dict:
+        return await supervisor.managers["fans"].snapshot()
+
+    @app.post("/api/v1/fans")
+    async def update_fans(update: FanUpdate) -> dict:
+        try:
+            return await supervisor.commands.dispatch("fans.update", update.model_dump(exclude_none=True))
+        except CommandTimeoutError as error:
+            raise HTTPException(status_code=504, detail=str(error)) from error
         except (ValueError, TimeoutError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except RuntimeError as error:
@@ -147,6 +175,8 @@ def create_app(supervisor: Supervisor, metrics_enabled: bool = True) -> FastAPI:
         desired_rgb = rgb_snapshot.get("desired", {})
         rgb_enabled.set(1 if desired_rgb.get("enabled") else 0)
         rgb_brightness.set(desired_rgb.get("brightness", 0))
+        fan_snapshot = await supervisor.managers["fans"].snapshot()
+        fan_state.labels("external").set(1 if fan_snapshot.get("actual", {}).get("external", {}).get("output_enabled") else 0)
         for name, status in (await supervisor.health()).items():
             manager_up.labels(name).set(1 if status["status"] == "ready" else 0)
         return Response(generate_latest(registry), media_type=CONTENT_TYPE_LATEST)

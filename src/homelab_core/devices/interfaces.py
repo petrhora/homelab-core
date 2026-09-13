@@ -29,3 +29,30 @@ class FakeRgbDevice(RgbDevice):
 
     async def close(self) -> None:
         self.closed = True
+
+
+class FanDevice(ABC):
+    @abstractmethod
+    async def set_fan(self, enabled: bool) -> None: ...
+
+    @abstractmethod
+    async def set_led(self, enabled: bool) -> None: ...
+
+    @abstractmethod
+    async def close(self) -> None: ...
+
+
+class FakeFanDevice(FanDevice):
+    def __init__(self) -> None:
+        self.fan_enabled = False
+        self.led_enabled = False
+        self.closed = False
+
+    async def set_fan(self, enabled: bool) -> None:
+        self.fan_enabled = enabled
+
+    async def set_led(self, enabled: bool) -> None:
+        self.led_enabled = enabled
+
+    async def close(self) -> None:
+        self.closed = True

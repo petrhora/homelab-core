@@ -19,6 +19,8 @@ Endpoints are available at `http://127.0.0.1:8000`:
 - `GET /api/v1/system/processes`
 - `GET /api/v1/rgb`
 - `POST /api/v1/rgb`
+- `GET /api/v1/fans`
+- `POST /api/v1/fans`
 - `GET /metrics`
 
 Configuration defaults to `/etc/homelab-core/config.toml`. Use `HOMELAB_CORE_CONFIG`
@@ -67,3 +69,27 @@ Animated pattern types are `breathing`, `flow`, `rainbow`, and `hue_cycle`.
 Animated patterns run at 30 frames per second and are replaced when a new RGB
 command is applied. The existing flat `color` field remains shorthand for a
 uniform `solid` pattern.
+
+On Pironman 5 hardware, the external fan motor is controlled by BCM GPIO6 and
+GPIO5 gates the RGB fan lighting. The RGB pixels remain part of the same WS2812
+chain configured above, so no separate fan RGB configuration is needed:
+
+```toml
+[fans]
+enabled = true
+poll_interval_seconds = 1
+
+[fans.external]
+mode = "auto"
+on_temperature_c = 55
+off_temperature_c = 50
+
+[fans.led]
+mode = "on"
+```
+
+`mode = "on"` keeps fan lighting enabled while the fan motor still follows its
+temperature thresholds. `follow` enables the lighting only while the external
+fan output is on. FAN API updates are runtime-only and reset to these values on
+restart. Install `.[hardware]`, grant the service account GPIO access, and do
+not run the official Pironman service concurrently.

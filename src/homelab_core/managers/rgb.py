@@ -6,7 +6,7 @@ from typing import Any
 
 from ..config import RgbConfig
 from ..devices.interfaces import RgbDevice, RgbPixel
-from ..rgb_patterns import Pattern, apply_brightness, normalize_pattern, pattern_to_payload
+from ..rgb_patterns import Pattern, adapt_retained_pattern, apply_brightness, normalize_pattern, pattern_to_payload
 from ..devices.ws2812 import Ws2812SpiDevice
 from ..runtime.commands import Command
 from ..runtime.state import StateStore, utc_now
@@ -14,6 +14,10 @@ from .base import Manager, ManagerStatus
 
 
 logger = logging.getLogger(__name__)
+
+ANIMATION_FRAME_INTERVAL_SECONDS = 1 / 30
+ANIMATION_RETRY_INITIAL_SECONDS = 0.1
+ANIMATION_RETRY_MAX_SECONDS = 5.0
 
 
 class RgbManager(Manager):
@@ -42,7 +46,7 @@ class RgbManager(Manager):
     async def start(self) -> None:
         try:
             if self._enabled:
-                self._actual = await self._apply()
+                self._actual, _ = await self._apply(self._pattern, self._led_count, self._brightness)
                 self._start_animation()
             else:
                 await self.device.clear()
@@ -114,37 +118,70 @@ class RgbManager(Manager):
             if "color" in payload or payload.get("clear"):
                 raise ValueError("pattern cannot be combined with color or clear")
             pattern_payload = payload["pattern"]
+        elif led_count != self._led_count:
+            pattern_payload = adapt_retained_pattern(pattern_payload, self._led_count, led_count)
         candidate_pattern = normalize_pattern(pattern_payload, led_count, color)
 
+        previous_enabled = self._enabled
+        committed = False
         try:
             await self._stop_animation()
+            if enabled:
+                actual, interrupted = await self._apply(candidate_pattern, led_count, brightness,
+                                                        complete_on_cancel=True)
+            else:
+                interrupted = await self._run_device_operation(self.device.clear(), complete_on_cancel=True)
+                actual = {"enabled": False, "color": "#000000", "led_count": led_count,
+                          "pattern": pattern_to_payload(candidate_pattern)}
             self._enabled = enabled
             self._color = color
             self._brightness = brightness
             self._led_count = led_count
             self._pattern = candidate_pattern
             self._pattern_started_at = time.monotonic()
+            self._actual = actual
+            committed = True
             if self._enabled:
-                self._actual = await self._apply()
                 self._start_animation()
-            else:
-                await self.device.clear()
-                self._actual = self._off_state()
             self._record_success(command.type)
             self._status = ManagerStatus.READY
+            await self._publish()
+            if interrupted:
+                raise asyncio.CancelledError
         except Exception as error:
+            if not committed and previous_enabled:
+                self._start_animation()
             self._record_error(command.type, error)
             self._status = ManagerStatus.DEGRADED
             await self._publish()
             raise
-        await self._publish()
+        except asyncio.CancelledError:
+            if not committed and previous_enabled:
+                self._start_animation()
+            await self._publish()
+            raise
         return await self._state()
 
-    async def _apply(self) -> dict[str, Any]:
-        frame = apply_brightness(self._pattern.render(self._led_count, 0), self._brightness)
-        await self.device.set_pixels(frame)
-        return {"enabled": True, "color": "#%02X%02X%02X" % frame[0], "led_count": self._led_count,
-                "pattern": pattern_to_payload(self._pattern)}
+    async def _apply(self, pattern: Pattern, led_count: int, brightness: float,
+                     *, complete_on_cancel: bool = False) -> tuple[dict[str, Any], bool]:
+        frame = apply_brightness(pattern.render(led_count, 0), brightness)
+        interrupted = await self._run_device_operation(self.device.set_pixels(frame), complete_on_cancel=complete_on_cancel)
+        return ({"enabled": True, "color": "#%02X%02X%02X" % frame[0], "led_count": led_count,
+                 "pattern": pattern_to_payload(pattern)}, interrupted)
+
+    async def _run_device_operation(self, operation: Any, *, complete_on_cancel: bool = False) -> bool:
+        """Finish hardware I/O before propagating cancellation to the caller."""
+        task = asyncio.create_task(operation)
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # A timed-out command must not leave the physical strip halfway
+            # through a frame while the manager moves on to another command.
+            await task
+            if complete_on_cancel:
+                return True
+            raise
+        return False
 
     def _start_animation(self) -> None:
         if self._pattern.type != "solid":
@@ -160,12 +197,27 @@ class RgbManager(Manager):
             await task
 
     async def _animate(self) -> None:
+        retry_delay = ANIMATION_RETRY_INITIAL_SECONDS
         try:
             while True:
                 elapsed = time.monotonic() - self._pattern_started_at
                 frame = apply_brightness(self._pattern.render(self._led_count, elapsed), self._brightness)
-                await self.device.set_pixels(frame)
-                await asyncio.sleep(1 / 30)
+                try:
+                    await self._run_device_operation(self.device.set_pixels(frame))
+                except Exception as error:
+                    self._record_error("animation", error)
+                    self._status = ManagerStatus.DEGRADED
+                    await self._publish()
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, ANIMATION_RETRY_MAX_SECONDS)
+                    continue
+
+                if self._status == ManagerStatus.DEGRADED:
+                    self._record_success("animation")
+                    self._status = ManagerStatus.READY
+                    await self._publish()
+                retry_delay = ANIMATION_RETRY_INITIAL_SECONDS
+                await asyncio.sleep(ANIMATION_FRAME_INTERVAL_SECONDS)
         except asyncio.CancelledError:
             raise
 

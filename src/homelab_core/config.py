@@ -39,12 +39,42 @@ class RgbConfig(BaseModel):
     spi_speed_hz: int = Field(default=2_400_000, ge=100_000, le=20_000_000)
 
 
+class ExternalFanConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    pin: int = Field(default=6, ge=0, le=53)
+    active_high: bool = True
+    mode: Literal["off", "on", "auto"] = "auto"
+    on_temperature_c: float = Field(default=55.0, ge=0, le=120)
+    off_temperature_c: float = Field(default=50.0, ge=0, le=120)
+
+
+class FanLedConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    pin: int = Field(default=5, ge=0, le=53)
+    active_high: bool = True
+    mode: Literal["off", "on", "follow"] = "on"
+
+
+class FansConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    poll_interval_seconds: float = Field(default=1.0, gt=0, le=3600)
+    temperature_path: Path = Path("/sys/class/thermal/thermal_zone0/temp")
+    external: ExternalFanConfig = ExternalFanConfig()
+    led: FanLedConfig = FanLedConfig()
+
+    def model_post_init(self, __context: object) -> None:
+        if self.external.off_temperature_c > self.external.on_temperature_c:
+            raise ValueError("fans.external.off_temperature_c must not exceed on_temperature_c")
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     api: ApiConfig = ApiConfig()
     logging: LoggingConfig = LoggingConfig()
     system: SystemConfig = SystemConfig()
     rgb: RgbConfig = RgbConfig()
+    fans: FansConfig = FansConfig()
     metrics_enabled: bool = True
 
 

@@ -23,7 +23,7 @@ class SystemManager(Manager):
 
     async def start(self) -> None:
         try:
-            self._snapshot = self._collect()
+            self._snapshot = await asyncio.to_thread(self._collect)
             await self.state.update(self.name, self._snapshot)
             self._status = ManagerStatus.READY
             self._task = asyncio.create_task(self._poll(), name="system-poll")
@@ -41,8 +41,10 @@ class SystemManager(Manager):
         while True:
             await asyncio.sleep(self.config.poll_interval_seconds)
             try:
-                self._snapshot = self._collect()
+                self._snapshot = await asyncio.to_thread(self._collect)
                 await self.state.update(self.name, self._snapshot)
+                self._error = None
+                self._status = ManagerStatus.READY
             except Exception as error:
                 self._error = str(error)
                 self._status = ManagerStatus.DEGRADED
@@ -90,12 +92,20 @@ class SystemManager(Manager):
     async def snapshot(self) -> dict:
         return self._snapshot
 
-    async def processes(self) -> list[dict[str, Any]]:
+    async def processes(self, offset: int = 0, limit: int = 100) -> dict[str, Any]:
         processes = []
-        for process in psutil.process_iter(["pid", "name", "cmdline", "status", "username"]):
+        has_more = False
+        skipped = 0
+        for process in psutil.process_iter(["pid", "name", "status", "username"]):
             try:
                 info = process.info
-                processes.append({**info, "cmdline": info.get("cmdline") or []})
+                if skipped < offset:
+                    skipped += 1
+                    continue
+                if len(processes) >= limit:
+                    has_more = True
+                    break
+                processes.append({key: info.get(key) for key in ("pid", "name", "status", "username")})
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
-        return processes
+        return {"items": processes, "offset": offset, "limit": limit, "has_more": has_more}

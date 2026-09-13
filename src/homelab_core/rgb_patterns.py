@@ -137,6 +137,20 @@ def normalize_pattern(payload: Any, led_count: int, fallback_color: RgbPixel) ->
     raise ValueError(f"unknown RGB pattern: {pattern_type}")
 
 
+def adapt_retained_pattern(payload: dict[str, Any], old_led_count: int, new_led_count: int) -> dict[str, Any]:
+    """Regenerate uniform retained sources when the strip length changes."""
+    if old_led_count == new_led_count or payload.get("type") not in ("solid", "breathing", "flow"):
+        return payload
+    pixels = payload.get("pixels")
+    if not isinstance(pixels, list) or len(pixels) != old_led_count:
+        return payload
+    if not pixels or any(pixel != pixels[0] for pixel in pixels[1:]):
+        raise ValueError("led_count changes require a replacement pattern for per-LED colors")
+    adapted = dict(payload)
+    adapted["pixels"] = [pixels[0]] * new_led_count
+    return adapted
+
+
 def apply_brightness(frame: Sequence[PatternPixel], brightness: float) -> list[RgbPixel]:
     return [tuple(round(channel * pixel.brightness * brightness) for channel in pixel.color)  # type: ignore[return-value]
             for pixel in frame]
