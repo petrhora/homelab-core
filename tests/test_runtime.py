@@ -766,6 +766,14 @@ def test_flow_interpolates_between_pixel_colors():
     assert frame == [(128, 0, 0), (128, 128, 0), (0, 128, 128), (0, 0, 128)]
 
 
+def test_flow_virtual_led_count_spreads_color_stops_across_a_larger_chain():
+    pattern = normalize_pattern({
+        "type": "flow", "pixels": ["#FF0000", "#0000FF"], "virtual_led_count": 4,
+    }, 2, (0, 0, 0))
+
+    assert apply_brightness(pattern.render(2, 0), 1.0) == [(255, 0, 0), (128, 0, 128)]
+
+
 def test_stepper_moves_discrete_configurable_steps():
     pattern = normalize_pattern({
         "type": "stepper", "pixels": ["#FF0000", "#00FF00", "#0000FF", "#000000"],
@@ -794,6 +802,14 @@ def test_gradient_supports_loop_and_ping_pong_modes():
     assert apply_brightness(ping_pong.render(4, 0), 1.0) == [
         (255, 0, 0), (0, 255, 0), (0, 0, 255), (0, 255, 0),
     ]
+
+
+def test_gradient_virtual_led_count_spreads_colors_across_a_larger_chain():
+    pattern = normalize_pattern({
+        "type": "gradient", "colors": ["#FF0000", "#0000FF"], "virtual_led_count": 4,
+    }, 2, (0, 0, 0))
+
+    assert apply_brightness(pattern.render(2, 0), 1.0) == [(255, 0, 0), (128, 0, 128)]
 
 
 def test_rainbow_defaults_to_a_virtual_strip_and_validates_explicit_size():

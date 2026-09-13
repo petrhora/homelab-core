@@ -71,9 +71,11 @@ Animated pattern types are `breathing`, `flow`, `stepper`, `gradient`,
 are replaced when a new RGB command is applied. The existing flat `color` field
 remains shorthand for a uniform `solid` pattern.
 
-`flow` smoothly interpolates the supplied pixel colors. Use `stepper` for
-discrete color jumps, with `step_leds` positions moved each
-`step_duration_ms` milliseconds:
+`flow` smoothly interpolates the supplied pixel colors. Its optional
+`virtual_led_count` spreads those colors across a larger virtual chain, so the
+physical LEDs show only a section of the transition. Use `stepper` for discrete
+color jumps, with `step_leds` positions moved each `step_duration_ms`
+milliseconds:
 
 ```json
 {
@@ -88,7 +90,9 @@ discrete color jumps, with `step_leds` positions moved each
 ```
 
 `gradient` accepts two or more colors. `loop` transitions from the final color
-back to the first, while `ping_pong` reverses at each endpoint:
+back to the first, while `ping_pong` reverses at each endpoint. Its optional
+`virtual_led_count` also limits the physical chain to a section of a larger
+gradient:
 
 ```json
 {
@@ -97,7 +101,8 @@ back to the first, while `ping_pong` reverses at each endpoint:
     "colors": ["#FF0000", "#FF8C00", "#FFFF00", "#00FF00"],
     "speed": 2,
     "direction": "forward",
-    "mode": "ping_pong"
+    "mode": "ping_pong",
+    "virtual_led_count": 16
   }
 }
 ```

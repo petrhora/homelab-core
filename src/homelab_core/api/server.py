@@ -46,6 +46,7 @@ class FlowPatternUpdate(PatternSourceUpdate):
     type: Literal["flow"] = "flow"
     speed: float = Field(default=1, ge=0)
     direction: Literal["forward", "reverse"] = "forward"
+    virtual_led_count: int | None = Field(default=None, ge=1)
 
 
 class StepperPatternUpdate(PatternSourceUpdate):
@@ -62,6 +63,7 @@ class GradientPatternUpdate(BaseModel):
     speed: float = Field(default=1, ge=0)
     direction: Literal["forward", "reverse"] = "forward"
     mode: Literal["loop", "ping_pong"] = "loop"
+    virtual_led_count: int | None = Field(default=None, ge=1)
 
     @field_validator("colors")
     @classmethod
