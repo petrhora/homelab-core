@@ -34,7 +34,8 @@ class Ws2812SpiDevice(RgbDevice):
 
     async def set_pixels(self, pixels: Sequence[RgbPixel]) -> None:
         await self._open()
-        payload = self._encode_pixels(pixels)
+        frame = [*pixels, *([(0, 0, 0)] * max(0, self._pixel_count - len(pixels)))]
+        payload = self._encode_pixels(frame)
         self._pixel_count = max(self._pixel_count, len(pixels))
         spi = self._spi
 

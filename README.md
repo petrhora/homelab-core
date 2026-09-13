@@ -66,14 +66,62 @@ RGB patterns can use a uniform color or an independently configured pixel frame:
 }
 ```
 
-Animated pattern types are `breathing`, `flow`, `rainbow`, and `hue_cycle`.
-Animated patterns run at 30 frames per second and are replaced when a new RGB
-command is applied. The existing flat `color` field remains shorthand for a
-uniform `solid` pattern.
+Animated pattern types are `breathing`, `flow`, `stepper`, `gradient`,
+`rainbow`, and `hue_cycle`. Animated patterns run at 30 frames per second and
+are replaced when a new RGB command is applied. The existing flat `color` field
+remains shorthand for a uniform `solid` pattern.
+
+`flow` smoothly interpolates the supplied pixel colors. Use `stepper` for
+discrete color jumps, with `step_leds` positions moved each
+`step_duration_ms` milliseconds:
+
+```json
+{
+  "pattern": {
+    "type": "stepper",
+    "pixels": ["#FF0000", "#00FF00", "#0000FF", "#000000"],
+    "step_leds": 2,
+    "step_duration_ms": 500,
+    "direction": "forward"
+  }
+}
+```
+
+`gradient` accepts two or more colors. `loop` transitions from the final color
+back to the first, while `ping_pong` reverses at each endpoint:
+
+```json
+{
+  "pattern": {
+    "type": "gradient",
+    "colors": ["#FF0000", "#FF8C00", "#FFFF00", "#00FF00"],
+    "speed": 2,
+    "direction": "forward",
+    "mode": "ping_pong"
+  }
+}
+```
+
+`rainbow.virtual_led_count` makes a physical strip appear to be part of a
+larger moving rainbow. It defaults to four times `led_count`; specify a larger
+value for a narrower section of the spectrum:
+
+```json
+{
+  "pattern": {
+    "type": "rainbow",
+    "speed": 0.1,
+    "direction": "forward",
+    "virtual_led_count": 16
+  }
+}
+```
 
 On Pironman 5 hardware, the external fan motor is controlled by BCM GPIO6 and
 GPIO5 gates the RGB fan lighting. The RGB pixels remain part of the same WS2812
-chain configured above, so no separate fan RGB configuration is needed:
+chain configured above, so no separate fan RGB configuration is needed. Set
+`rgb.led_count` to the total number of strip and fan pixels so one pattern
+frame updates them together. Reduced frames explicitly clear trailing pixels.
 
 ```toml
 [fans]

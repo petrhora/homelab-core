@@ -3,12 +3,17 @@ from httpx import ASGITransport, AsyncClient
 
 from homelab_core.api.server import create_app
 from homelab_core.config import AppConfig
+from homelab_core.devices.ws2812 import Ws2812SpiDevice
 from homelab_core.runtime.commands import CommandTimeoutError
 from homelab_core.runtime.supervisor import Supervisor
 
 
 @pytest.mark.asyncio
 async def test_read_only_api(monkeypatch):
+    async def unavailable_spi(self):
+        raise RuntimeError("SPI device unavailable")
+
+    monkeypatch.setattr(Ws2812SpiDevice, "clear", unavailable_spi)
     supervisor = Supervisor(AppConfig())
     await supervisor.start()
     try:

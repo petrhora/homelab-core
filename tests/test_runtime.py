@@ -756,6 +756,54 @@ def test_animated_patterns_render_normalized_frames():
     assert frame[1] == (64, 32, 16)
 
 
+def test_flow_interpolates_between_pixel_colors():
+    pattern = normalize_pattern({
+        "type": "flow", "pixels": ["#FF0000", "#00FF00", "#0000FF", "#000000"], "speed": 1,
+    }, 4, (0, 0, 0))
+
+    frame = apply_brightness(pattern.render(4, 0.5), 1.0)
+
+    assert frame == [(128, 0, 0), (128, 128, 0), (0, 128, 128), (0, 0, 128)]
+
+
+def test_stepper_moves_discrete_configurable_steps():
+    pattern = normalize_pattern({
+        "type": "stepper", "pixels": ["#FF0000", "#00FF00", "#0000FF", "#000000"],
+        "step_leds": 2, "step_duration_ms": 500,
+    }, 4, (0, 0, 0))
+
+    assert apply_brightness(pattern.render(4, 0.49), 1.0) == [
+        (255, 0, 0), (0, 255, 0), (0, 0, 255), (0, 0, 0),
+    ]
+    assert apply_brightness(pattern.render(4, 0.5), 1.0) == [
+        (0, 0, 255), (0, 0, 0), (255, 0, 0), (0, 255, 0),
+    ]
+
+
+def test_gradient_supports_loop_and_ping_pong_modes():
+    loop = normalize_pattern({
+        "type": "gradient", "colors": ["#FF0000", "#0000FF"], "mode": "loop",
+    }, 4, (0, 0, 0))
+    ping_pong = normalize_pattern({
+        "type": "gradient", "colors": ["#FF0000", "#00FF00", "#0000FF"], "mode": "ping_pong",
+    }, 4, (0, 0, 0))
+
+    assert apply_brightness(loop.render(4, 0), 1.0) == [
+        (255, 0, 0), (128, 0, 128), (0, 0, 255), (128, 0, 128),
+    ]
+    assert apply_brightness(ping_pong.render(4, 0), 1.0) == [
+        (255, 0, 0), (0, 255, 0), (0, 0, 255), (0, 255, 0),
+    ]
+
+
+def test_rainbow_defaults_to_a_virtual_strip_and_validates_explicit_size():
+    pattern = normalize_pattern({"type": "rainbow"}, 4, (0, 0, 0))
+
+    assert all(pixel.color[2] == 0 for pixel in pattern.render(4, 0))
+    with pytest.raises(ValueError, match="virtual_led_count"):
+        normalize_pattern({"type": "rainbow", "virtual_led_count": 3}, 4, (0, 0, 0))
+
+
 @pytest.mark.asyncio
 async def test_rgb_starts_and_replaces_animation_task():
     state = StateStore()

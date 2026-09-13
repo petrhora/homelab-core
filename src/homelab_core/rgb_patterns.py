@@ -55,10 +55,43 @@ class FlowPattern(Pattern):
     type: str = "flow"
 
     def render(self, led_count: int, elapsed: float) -> tuple[PatternPixel, ...]:
-        shift = math.floor(elapsed * self.speed) % led_count
+        shift = elapsed * self.speed
+        if self.direction == "reverse":
+            shift = -shift
+        return tuple(_interpolate_pixels(self.pixels, index - shift) for index in range(led_count))
+
+
+@dataclass(frozen=True)
+class StepperPattern(Pattern):
+    pixels: tuple[PatternPixel, ...]
+    step_leds: int = 1
+    step_duration_ms: int = 1000
+    direction: str = "forward"
+    type: str = "stepper"
+
+    def render(self, led_count: int, elapsed: float) -> tuple[PatternPixel, ...]:
+        shift = (math.floor(elapsed * 1000 / self.step_duration_ms) * self.step_leds) % led_count
         if self.direction == "reverse":
             shift = -shift
         return tuple(self.pixels[(index - shift) % led_count] for index in range(led_count))
+
+
+@dataclass(frozen=True)
+class GradientPattern(Pattern):
+    colors: tuple[RgbPixel, ...]
+    speed: float = 1.0
+    direction: str = "forward"
+    mode: str = "loop"
+    type: str = "gradient"
+
+    def render(self, led_count: int, elapsed: float) -> tuple[PatternPixel, ...]:
+        shift = elapsed * self.speed
+        if self.direction == "reverse":
+            shift = -shift
+        colors = self.colors if self.mode == "loop" else self.colors + self.colors[-2:0:-1]
+        return tuple(_interpolate_pixels(tuple(PatternPixel(color) for color in colors),
+                                         (index - shift) * len(colors) / led_count)
+                     for index in range(led_count))
 
 
 @dataclass(frozen=True)
@@ -67,13 +100,15 @@ class RainbowPattern(Pattern):
     direction: str = "forward"
     saturation: float = 1.0
     brightness: float = 1.0
+    virtual_led_count: int | None = None
     type: str = "rainbow"
 
     def render(self, led_count: int, elapsed: float) -> tuple[PatternPixel, ...]:
         sign = -1 if self.direction == "reverse" else 1
         offset = elapsed * self.speed * sign
+        virtual_led_count = self.virtual_led_count or led_count * 4
         return tuple(
-            PatternPixel(_hsv_rgb((index / led_count + offset) % 1, self.saturation, 1.0), self.brightness)
+            PatternPixel(_hsv_rgb((index / virtual_led_count + offset) % 1, self.saturation, 1.0), self.brightness)
             for index in range(led_count)
         )
 
@@ -125,11 +160,30 @@ def normalize_pattern(payload: Any, led_count: int, fallback_color: RgbPixel) ->
         if direction not in ("forward", "reverse"):
             raise ValueError("direction must be forward or reverse")
         return FlowPattern(pixels, speed, direction)
+    if pattern_type == "stepper":
+        pixels = _source_pixels(payload, led_count, fallback_color)
+        step_leds = _number(payload, "step_leds", 1, integer=True, minimum=1)
+        step_duration_ms = _number(payload, "step_duration_ms", 1000, integer=True, minimum=100)
+        return StepperPattern(pixels, step_leds, step_duration_ms, _direction(payload))
+    if pattern_type == "gradient":
+        values = payload.get("colors")
+        if not isinstance(values, list) or len(values) < 2:
+            raise ValueError("gradient colors must contain at least two colors")
+        mode = payload.get("mode", "loop")
+        if mode not in ("loop", "ping_pong"):
+            raise ValueError("gradient mode must be loop or ping_pong")
+        return GradientPattern(tuple(_parse_color(color) for color in values),
+                               _number(payload, "speed", 1.0, minimum=0), _direction(payload), mode)
     if pattern_type == "rainbow":
+        virtual_led_count = payload.get("virtual_led_count")
+        if virtual_led_count is not None and (not isinstance(virtual_led_count, int)
+                                              or isinstance(virtual_led_count, bool)
+                                              or virtual_led_count < led_count):
+            raise ValueError("virtual_led_count must be an integer no smaller than led_count")
         return RainbowPattern(_number(payload, "speed", 0.1, minimum=0),
-                              _direction(payload),
-                              _number(payload, "saturation", 1.0, minimum=0, maximum=1),
-                              _number(payload, "brightness", 1.0, minimum=0, maximum=1))
+                               _direction(payload),
+                               _number(payload, "saturation", 1.0, minimum=0, maximum=1),
+                               _number(payload, "brightness", 1.0, minimum=0, maximum=1), virtual_led_count)
     if pattern_type == "hue_cycle":
         return HueCyclePattern(_number(payload, "speed", 0.1, minimum=0),
                                _number(payload, "saturation", 1.0, minimum=0, maximum=1),
@@ -139,7 +193,7 @@ def normalize_pattern(payload: Any, led_count: int, fallback_color: RgbPixel) ->
 
 def adapt_retained_pattern(payload: dict[str, Any], old_led_count: int, new_led_count: int) -> dict[str, Any]:
     """Regenerate uniform retained sources when the strip length changes."""
-    if old_led_count == new_led_count or payload.get("type") not in ("solid", "breathing", "flow"):
+    if old_led_count == new_led_count or payload.get("type") not in ("solid", "breathing", "flow", "stepper"):
         return payload
     pixels = payload.get("pixels")
     if not isinstance(pixels, list) or len(pixels) != old_led_count:
@@ -157,7 +211,7 @@ def apply_brightness(frame: Sequence[PatternPixel], brightness: float) -> list[R
 
 
 def pattern_to_payload(pattern: Pattern) -> dict[str, Any]:
-    if isinstance(pattern, (SolidPattern, BreathingPattern, FlowPattern)):
+    if isinstance(pattern, (SolidPattern, BreathingPattern, FlowPattern, StepperPattern)):
         payload: dict[str, Any] = {
             "type": pattern.type,
             "pixels": [{"color": _format_color(pixel.color), "brightness": pixel.brightness}
@@ -168,10 +222,19 @@ def pattern_to_payload(pattern: Pattern) -> dict[str, Any]:
                             "max_intensity": pattern.max_intensity})
         elif isinstance(pattern, FlowPattern):
             payload.update({"speed": pattern.speed, "direction": pattern.direction})
+        elif isinstance(pattern, StepperPattern):
+            payload.update({"step_leds": pattern.step_leds, "step_duration_ms": pattern.step_duration_ms,
+                            "direction": pattern.direction})
         return payload
+    if isinstance(pattern, GradientPattern):
+        return {"type": pattern.type, "colors": [_format_color(color) for color in pattern.colors],
+                "speed": pattern.speed, "direction": pattern.direction, "mode": pattern.mode}
     if isinstance(pattern, RainbowPattern):
-        return {"type": pattern.type, "speed": pattern.speed, "direction": pattern.direction,
-                "saturation": pattern.saturation, "brightness": pattern.brightness}
+        payload = {"type": pattern.type, "speed": pattern.speed, "direction": pattern.direction,
+                   "saturation": pattern.saturation, "brightness": pattern.brightness}
+        if pattern.virtual_led_count is not None:
+            payload["virtual_led_count"] = pattern.virtual_led_count
+        return payload
     if isinstance(pattern, HueCyclePattern):
         return {"type": pattern.type, "speed": pattern.speed, "saturation": pattern.saturation,
                 "brightness": pattern.brightness}
@@ -194,6 +257,16 @@ def _parse_pixel(value: Any) -> PatternPixel:
     if isinstance(value, dict):
         return PatternPixel(_parse_color(value.get("color")), _number(value, "brightness", 1.0, minimum=0, maximum=1))
     raise ValueError("pixels must contain colors or {color, brightness} objects")
+
+
+def _interpolate_pixels(pixels: Sequence[PatternPixel], position: float) -> PatternPixel:
+    lower = math.floor(position)
+    fraction = position - lower
+    start = pixels[lower % len(pixels)]
+    end = pixels[(lower + 1) % len(pixels)]
+    return PatternPixel(tuple(round(start.color[index] + (end.color[index] - start.color[index]) * fraction)
+                              for index in range(3)),
+                        start.brightness + (end.brightness - start.brightness) * fraction)  # type: ignore[arg-type]
 
 
 def _parse_color(value: Any) -> RgbPixel:

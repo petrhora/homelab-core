@@ -48,6 +48,27 @@ class FlowPatternUpdate(PatternSourceUpdate):
     direction: Literal["forward", "reverse"] = "forward"
 
 
+class StepperPatternUpdate(PatternSourceUpdate):
+    type: Literal["stepper"] = "stepper"
+    step_leds: int = Field(default=1, ge=1)
+    step_duration_ms: int = Field(default=1000, ge=100)
+    direction: Literal["forward", "reverse"] = "forward"
+
+
+class GradientPatternUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["gradient"] = "gradient"
+    colors: list[str] = Field(min_length=2)
+    speed: float = Field(default=1, ge=0)
+    direction: Literal["forward", "reverse"] = "forward"
+    mode: Literal["loop", "ping_pong"] = "loop"
+
+    @field_validator("colors")
+    @classmethod
+    def validate_colors(cls, values: list[str]) -> list[str]:
+        return [_validate_color(value) for value in values]
+
+
 class RainbowPatternUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["rainbow"] = "rainbow"
@@ -55,6 +76,7 @@ class RainbowPatternUpdate(BaseModel):
     direction: Literal["forward", "reverse"] = "forward"
     saturation: float = Field(default=1, ge=0, le=1)
     brightness: float = Field(default=1, ge=0, le=1)
+    virtual_led_count: int | None = Field(default=None, ge=1)
 
 
 class HueCyclePatternUpdate(BaseModel):
@@ -66,7 +88,8 @@ class HueCyclePatternUpdate(BaseModel):
 
 
 PatternUpdate = Annotated[
-    SolidPatternUpdate | BreathingPatternUpdate | FlowPatternUpdate | RainbowPatternUpdate | HueCyclePatternUpdate,
+    SolidPatternUpdate | BreathingPatternUpdate | FlowPatternUpdate | StepperPatternUpdate | GradientPatternUpdate |
+    RainbowPatternUpdate | HueCyclePatternUpdate,
     Field(discriminator="type"),
 ]
 
