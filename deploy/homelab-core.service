@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/homelab-core
+ExecStart=/opt/homelab-core/.venv/bin/homelab-core
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
