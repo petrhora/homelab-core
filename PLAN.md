@@ -4,7 +4,7 @@
 
 Build `homelab-core`, a general-purpose local agent for managing and observing a homelab node.
 
-The first target is a Raspberry Pi with a Pironman 5 Max case, but the architecture must not depend on that product name or hardware. The service should provide one process that owns local system resources, exposes a small authenticated API, exports Prometheus metrics, and supports future integrations such as WiFi-connected RGB devices.
+The first target is a Raspberry Pi with a Pironman 5 Max case, but the architecture must not depend on that product name or hardware. The service should provide one process that owns local system resources, exposes a small API, exports Prometheus metrics, and supports future integrations such as WiFi-connected RGB devices.
 
 ## 2. Initial Scope
 
@@ -26,7 +26,6 @@ The first target is a Raspberry Pi with a Pironman 5 Max case, but the architect
 - Structured, rotating logs
 - Graceful shutdown and hardware cleanup
 - systemd service integration
-- Authenticated HTTP API
 - Prometheus `/metrics` endpoint
 
 ### Explicitly deferred
@@ -389,7 +388,7 @@ API requirements:
 - Separate read and write authorization.
 - Strong authorization for shutdown and reboot.
 
-Do not expose the API directly to the public internet. Prefer localhost plus Tailscale, a LAN-only bind address, or an authenticated reverse proxy.
+Do not expose the API directly to the public internet. Prefer localhost plus Tailscale, a LAN-only bind address, or a reverse proxy.
 
 ## 15. Prometheus Metrics
 
@@ -438,7 +437,7 @@ Use a staged adapter strategy:
 
 Do not run the official `pironman5` service, `pm_dashboard`, and `homelab-core` simultaneously. Only one process should own each GPIO, SPI, I2C, and input resource.
 
-`pm_auto` is an in-process Python package. It does not provide the API, authentication, persistence, or remote backend integration required by this project.
+`pm_auto` is an in-process Python package. It does not provide the API, persistence, or remote backend integration required by this project.
 
 ## 17. Configuration
 
@@ -458,7 +457,6 @@ Configuration areas:
 - Docker integration
 - Prometheus exporter
 - API bind address and port
-- Authentication
 - External integrations
 
 Requirements:
@@ -596,7 +594,6 @@ No hardware test should require the official dashboard.
 
 ### Milestone 8: Remote integration
 
-- Add API authentication.
 - Add network deployment configuration.
 - Add backend client or webhook/event mechanism.
 - Add WiFi RGB integration using the same device interface.

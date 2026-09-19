@@ -1,7 +1,7 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from homelab_core.api.server import create_app
+from homelab_core.api.server import RgbUpdate, create_app
 from homelab_core.config import AppConfig
 from homelab_core.devices.ws2812 import Ws2812SpiDevice
 from homelab_core.runtime.commands import CommandTimeoutError
@@ -78,3 +78,13 @@ async def test_lighting_update_reports_hardware_failure(monkeypatch):
 
     assert response.status_code == 503
     assert response.json()["detail"] == "RGB unavailable"
+
+
+@pytest.mark.parametrize("pattern", [
+    {"type": "flow", "pixels": ["#FFFFFF"] * 1025},
+    {"type": "gradient", "colors": ["#FFFFFF"] * 1025},
+    {"type": "rainbow", "virtual_led_count": 1025},
+])
+def test_rgb_update_rejects_oversized_pattern_sources(pattern):
+    with pytest.raises(ValueError):
+        RgbUpdate.model_validate({"pattern": pattern})

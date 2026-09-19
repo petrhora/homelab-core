@@ -84,6 +84,45 @@ async def test_power_button_long_press_requests_shutdown_once():
 
 
 @pytest.mark.asyncio
+async def test_power_button_release_does_not_cancel_dispatched_shutdown():
+    class BlockingSystemActions:
+        def __init__(self):
+            self.started = asyncio.Event()
+            self.complete = asyncio.Event()
+            self.finished = False
+
+        async def shutdown(self):
+            self.started.set()
+            await self.complete.wait()
+            self.finished = True
+
+        async def reboot(self):
+            raise AssertionError("reboot should not be called")
+
+    device = FakePowerButtonDevice()
+    actions = BlockingSystemActions()
+    events = EventBus()
+    manager = PowerButtonManager(
+        PowerButtonConfig(enabled=True, debounce_ms=0, long_press_ms=500),
+        StateStore(), events, device, actions,
+    )
+    queue = events.subscribe()
+    await manager.start()
+    await device.press()
+    await asyncio.wait_for(queue.get(), 1)
+    await asyncio.wait_for(actions.started.wait(), 1)
+    await device.release()
+
+    while (await manager.snapshot())["actual"]["pressed"]:
+        await asyncio.sleep(0)
+    actions.complete.set()
+    while not actions.finished:
+        await asyncio.sleep(0)
+
+    await manager.stop()
+
+
+@pytest.mark.asyncio
 async def test_power_button_short_tap_within_debounce_does_not_trigger_long_press():
     device = FakePowerButtonDevice()
     actions = FakeSystemActions()

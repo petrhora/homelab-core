@@ -61,8 +61,23 @@ class LightingManager(Manager):
             async with self._lock:
                 values = self.config.model_dump()
                 values.update(command.payload)
+                previous_config = self.config
+                previous_allowed = self._allowed
+                previous_next_transition = self._next_transition
                 self.config = LightingConfig.model_validate(values)
-                await self._reconcile_locked()
+                try:
+                    await self._reconcile_locked()
+                except Exception:
+                    self.config = previous_config
+                    self._allowed = previous_allowed
+                    self._next_transition = previous_next_transition
+                    if previous_allowed is not None:
+                        # Both outputs may have changed before a later schedule command failed.
+                        with contextlib.suppress(Exception):
+                            await self.commands.dispatch("rgb.schedule", {"allowed": previous_allowed})
+                        with contextlib.suppress(Exception):
+                            await self.commands.dispatch("fans.schedule", {"allowed": previous_allowed})
+                    raise
                 self._status = ManagerStatus.READY
                 self._error = None
         except Exception as error:

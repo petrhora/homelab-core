@@ -10,6 +10,9 @@ from ..runtime.commands import CommandTimeoutError
 from ..runtime.supervisor import Supervisor
 
 
+MAX_PATTERN_SOURCE_LEDS = 1024
+
+
 class RgbPixelUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     color: str
@@ -24,7 +27,7 @@ class RgbPixelUpdate(BaseModel):
 class PatternSourceUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     color: str | None = None
-    pixels: list[str | RgbPixelUpdate] | None = None
+    pixels: list[str | RgbPixelUpdate] | None = Field(default=None, max_length=MAX_PATTERN_SOURCE_LEDS)
 
     @field_validator("color")
     @classmethod
@@ -47,7 +50,7 @@ class FlowPatternUpdate(PatternSourceUpdate):
     type: Literal["flow"] = "flow"
     speed: float = Field(default=1, ge=0)
     direction: Literal["forward", "reverse"] = "forward"
-    virtual_led_count: int | None = Field(default=None, ge=1)
+    virtual_led_count: int | None = Field(default=None, ge=1, le=MAX_PATTERN_SOURCE_LEDS)
 
 
 class StepperPatternUpdate(PatternSourceUpdate):
@@ -60,11 +63,11 @@ class StepperPatternUpdate(PatternSourceUpdate):
 class GradientPatternUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["gradient"] = "gradient"
-    colors: list[str] = Field(min_length=2)
+    colors: list[str] = Field(min_length=2, max_length=MAX_PATTERN_SOURCE_LEDS)
     speed: float = Field(default=1, ge=0)
     direction: Literal["forward", "reverse"] = "forward"
     mode: Literal["loop", "ping_pong"] = "loop"
-    virtual_led_count: int | None = Field(default=None, ge=1)
+    virtual_led_count: int | None = Field(default=None, ge=1, le=MAX_PATTERN_SOURCE_LEDS)
 
     @field_validator("colors")
     @classmethod
@@ -79,7 +82,7 @@ class RainbowPatternUpdate(BaseModel):
     direction: Literal["forward", "reverse"] = "forward"
     saturation: float = Field(default=1, ge=0, le=1)
     brightness: float = Field(default=1, ge=0, le=1)
-    virtual_led_count: int | None = Field(default=None, ge=1)
+    virtual_led_count: int | None = Field(default=None, ge=1, le=MAX_PATTERN_SOURCE_LEDS)
 
 
 class HueCyclePatternUpdate(BaseModel):

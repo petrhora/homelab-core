@@ -116,9 +116,10 @@ class PowerButtonManager(Manager):
             self._long_press_task = asyncio.create_task(self._long_press(), name="power-button-long-press")
         else:
             if self._long_press_task is not None:
-                self._long_press_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._long_press_task
+                if not self._long_press_triggered:
+                    self._long_press_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await self._long_press_task
                 self._long_press_task = None
             if not self._long_press_triggered:
                 self._click_count += 1

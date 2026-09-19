@@ -192,6 +192,33 @@ async def test_lighting_schedule_update_immediately_restores_leds():
 
 
 @pytest.mark.asyncio
+async def test_lighting_update_rolls_back_after_partial_schedule_failure():
+    calls = []
+    commands = CommandBus()
+
+    async def update_rgb(command):
+        calls.append(("rgb", command.payload["allowed"]))
+
+    async def update_fans(command):
+        calls.append(("fans", command.payload["allowed"]))
+        if not command.payload["allowed"]:
+            raise RuntimeError("fan LED unavailable")
+
+    commands.register("rgb.schedule", update_rgb, resource_id="rgb-device")
+    commands.register("fans.schedule", update_fans, resource_id="fan-gpio")
+    manager = LightingManager(LightingConfig(enabled=False), StateStore(), commands)
+    manager._allowed = True
+
+    with pytest.raises(RuntimeError, match="fan LED unavailable"):
+        await manager.execute(Command("lighting.update", "lighting", {"enabled": True, "windows": []}, "test", 1))
+
+    assert manager.config.enabled is False
+    assert manager._allowed is True
+    assert calls == [("rgb", False), ("fans", False), ("rgb", True), ("fans", True)]
+    await commands.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_gpio_fan_initializes_active_low_outputs_inactive(monkeypatch):
     class Gpio:
         BCM = "BCM"
@@ -301,6 +328,28 @@ async def test_fans_manual_off_does_not_depend_on_temperature_sensor():
     assert device.fan_enabled is False
     assert device.led_enabled is False
     assert (await manager.health())["status"] == "ready"
+    await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_fan_update_restores_outputs_after_led_write_failure():
+    class FailingLedDevice(FakeFanDevice):
+        async def set_led(self, enabled: bool) -> None:
+            if enabled:
+                raise RuntimeError("LED write failed")
+            await super().set_led(enabled)
+
+    device = FailingLedDevice()
+    config = FansConfig(enabled=True, external=ExternalFanConfig(mode="off"), led=FanLedConfig(mode="off"))
+    manager = FanManager(config, StateStore(), device)
+    await manager.start()
+
+    with pytest.raises(RuntimeError, match="LED write failed"):
+        await manager.execute(Command("fans.update", "fan-gpio", {"mode": "on", "led_mode": "on"}, "test", 1))
+
+    assert device.fan_enabled is False
+    assert device.led_enabled is False
+    assert (await manager.snapshot())["actual"]["external"]["output_enabled"] is False
     await manager.stop()
 
 

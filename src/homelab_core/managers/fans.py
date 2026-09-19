@@ -183,10 +183,20 @@ class FanManager(Manager):
         fan_enabled = True if not temperature_available else self._resolve_fan_state()
         led_enabled = self._resolve_led_state(fan_enabled) and self._schedule_allowed
         if self.device is not None:
-            if force or fan_enabled != self._fan_enabled:
-                await self.device.set_fan(fan_enabled)
-            if force or led_enabled != self._led_enabled:
-                await self.device.set_led(led_enabled)
+            previous_fan_enabled = self._fan_enabled
+            previous_led_enabled = self._led_enabled
+            try:
+                if force or fan_enabled != previous_fan_enabled:
+                    await self.device.set_fan(fan_enabled)
+                if force or led_enabled != previous_led_enabled:
+                    await self.device.set_led(led_enabled)
+            except Exception:
+                # Restore outputs because writes are not atomic across the two GPIO pins.
+                with contextlib.suppress(Exception):
+                    await self.device.set_fan(previous_fan_enabled)
+                with contextlib.suppress(Exception):
+                    await self.device.set_led(previous_led_enabled)
+                raise
         self._fan_enabled = fan_enabled
         self._led_enabled = led_enabled
         return temperature_available
