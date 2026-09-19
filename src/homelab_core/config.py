@@ -43,6 +43,16 @@ class RgbConfig(BaseModel):
     spi_speed_hz: int = Field(default=2_400_000, ge=100_000, le=20_000_000)
 
 
+class OledConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    bus: int = Field(default=1, ge=0, le=31)
+    address: Literal["auto", "0x3c", "0x3d"] = "auto"
+    refresh_interval_seconds: float = Field(default=1.0, gt=0, le=60)
+    sleep_timeout_seconds: float = Field(default=0, ge=0, le=3600)
+    rotation: Literal[0, 180] = 0
+
+
 class ExternalFanConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     pin: int = Field(default=6, ge=0, le=53)
@@ -124,10 +134,12 @@ class AppConfig(BaseModel):
     logging: LoggingConfig = LoggingConfig()
     system: SystemConfig = SystemConfig()
     rgb: RgbConfig = RgbConfig()
+    oled: OledConfig = OledConfig()
     fans: FansConfig = FansConfig()
     lighting: LightingConfig = LightingConfig()
     power_button: PowerButtonConfig = PowerButtonConfig()
     metrics_enabled: bool = True
+    persistence_path: Path = Path("/var/lib/homelab-core/state.json")
 
 
 def load_config(path: Path | None = None) -> AppConfig:

@@ -19,6 +19,8 @@ Endpoints are available at `http://127.0.0.1:8000`:
 - `GET /api/v1/system/processes`
 - `GET /api/v1/rgb`
 - `POST /api/v1/rgb`
+- `GET /api/v1/oled`
+- `POST /api/v1/oled`
 - `GET /api/v1/fans`
 - `POST /api/v1/fans`
 - `GET /api/v1/lighting`
@@ -29,6 +31,25 @@ Endpoints are available at `http://127.0.0.1:8000`:
 Configuration defaults to `/etc/homelab-core/config.toml`. Use `HOMELAB_CORE_CONFIG`
 to select another file during development. Missing configuration is valid and uses
 safe defaults. RGB is disabled unless explicitly enabled.
+
+The OLED is disabled unless explicitly enabled. It uses an SSD1306 128x64 panel
+on I2C bus 1 and automatically detects address `0x3C` or `0x3D`:
+
+```toml
+[oled]
+enabled = true
+bus = 1
+address = "auto"
+refresh_interval_seconds = 1.0
+sleep_timeout_seconds = 30
+rotation = 0
+```
+
+Install `.[hardware]` for OLED support, enable I2C on the Raspberry Pi, and do
+not run another service that owns the same I2C device. The initial display page
+shows CPU usage, temperature, memory usage, and hostname. OLED API updates are
+persisted in `/var/lib/homelab-core/state.json` and restored after restart; the
+display is cleared during shutdown.
 
 To enable the local WS2812 strip on a Raspberry Pi, install the hardware dependency
 and create `/etc/homelab-core/config.toml`:
@@ -66,7 +87,8 @@ days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 ```
 
 Use `POST /api/v1/lighting` to change the schedule without restarting. These
-updates are runtime-only, like the RGB and fan APIs:
+updates, like RGB and fan API updates, are persisted in
+`/var/lib/homelab-core/state.json` and restored after restart:
 
 ```json
 {
@@ -186,8 +208,15 @@ mode = "on"
 
 `mode = "on"` keeps fan lighting enabled while the fan motor still follows its
 temperature thresholds. `follow` enables the lighting only while the external
-fan output is on. FAN API updates are runtime-only and reset to these values on
-restart. Install `.[hardware]`, which provides Pi 5-compatible `RPi.GPIO`
+fan output is on. FAN API updates are persisted and override these values on
+restart. Use `DELETE /api/v1/state` to clear persisted overrides; the configured
+values take effect after the next restart. Install `.[hardware]`, which provides Pi 5-compatible `RPi.GPIO`
 compatibility through `rpi-lgpio`, grant the service account GPIO access, and do
 not run the official Pironman service concurrently. `rpi-lgpio` cannot coexist
 with the legacy `RPi.GPIO` package in one virtual environment.
+
+Persisted API values take precedence over values in
+`/etc/homelab-core/config.toml` for RGB, fan, lighting, and OLED runtime settings.
+Hardware paths, pins, and manager enablement remain controlled by the
+configuration file. Set top-level `persistence_path` to use a different state
+file.

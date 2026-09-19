@@ -10,7 +10,8 @@ Restart=on-failure
 RestartSec=5
 User=homelab
 Group=homelab
-SupplementaryGroups=spi gpio input
+SupplementaryGroups=spi gpio i2c input
+StateDirectory=homelab-core
 NoNewPrivileges=true
 PrivateTmp=true
 

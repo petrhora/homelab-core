@@ -56,3 +56,7 @@ class FakeFanDevice(FanDevice):
 
     async def close(self) -> None:
         self.closed = True
+
+
+# Keep hardware interfaces discoverable from the original interface module.
+from .oled import FakeOledDevice, OledDevice  # noqa: E402,F401

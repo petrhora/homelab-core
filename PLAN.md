@@ -22,7 +22,7 @@ The first target is a Raspberry Pi with a Pironman 5 Max case, but the architect
 - One long-running process
 - One asyncio event loop
 - One owner for each local hardware resource
-- Configuration persistence
+- Configuration persistence for API-controlled desired state
 - Structured, rotating logs
 - Graceful shutdown and hardware cleanup
 - systemd service integration

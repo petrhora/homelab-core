@@ -123,6 +123,12 @@ class FanUpdate(BaseModel):
     led_mode: Literal["off", "on", "follow"] | None = None
 
 
+class OledUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool | None = None
+    sleep_timeout_seconds: float | None = Field(default=None, ge=0, le=3600)
+
+
 class LightingUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool | None = None
@@ -172,10 +178,29 @@ def create_app(supervisor: Supervisor, metrics_enabled: bool = True) -> FastAPI:
     async def rgb() -> dict:
         return await supervisor.managers["rgb"].snapshot()
 
+    @app.get("/api/v1/oled")
+    async def oled() -> dict:
+        return await supervisor.managers["oled"].snapshot()
+
+    @app.post("/api/v1/oled")
+    async def update_oled(update: OledUpdate) -> dict:
+        try:
+            result = await supervisor.commands.dispatch("oled.update", update.model_dump(exclude_none=True))
+            await supervisor.persist_result("oled", result)
+            return result
+        except CommandTimeoutError as error:
+            raise HTTPException(status_code=504, detail=str(error)) from error
+        except (ValueError, TimeoutError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
     @app.post("/api/v1/rgb")
     async def update_rgb(update: RgbUpdate) -> dict:
         try:
-            return await supervisor.commands.dispatch("rgb.update", update.model_dump(exclude_none=True))
+            result = await supervisor.commands.dispatch("rgb.update", update.model_dump(exclude_none=True))
+            await supervisor.persist_result("rgb", result)
+            return result
         except CommandTimeoutError as error:
             raise HTTPException(status_code=504, detail=str(error)) from error
         except (ValueError, TimeoutError) as error:
@@ -194,7 +219,9 @@ def create_app(supervisor: Supervisor, metrics_enabled: bool = True) -> FastAPI:
     @app.post("/api/v1/lighting")
     async def update_lighting(update: LightingUpdate) -> dict:
         try:
-            return await supervisor.commands.dispatch("lighting.update", update.model_dump(exclude_unset=True))
+            result = await supervisor.commands.dispatch("lighting.update", update.model_dump(exclude_unset=True))
+            await supervisor.persist_result("lighting", result)
+            return result
         except CommandTimeoutError as error:
             raise HTTPException(status_code=504, detail=str(error)) from error
         except (ValueError, TimeoutError) as error:
@@ -209,13 +236,20 @@ def create_app(supervisor: Supervisor, metrics_enabled: bool = True) -> FastAPI:
     @app.post("/api/v1/fans")
     async def update_fans(update: FanUpdate) -> dict:
         try:
-            return await supervisor.commands.dispatch("fans.update", update.model_dump(exclude_none=True))
+            result = await supervisor.commands.dispatch("fans.update", update.model_dump(exclude_none=True))
+            await supervisor.persist_result("fans", result)
+            return result
         except CommandTimeoutError as error:
             raise HTTPException(status_code=504, detail=str(error)) from error
         except (ValueError, TimeoutError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except RuntimeError as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @app.delete("/api/v1/state")
+    async def clear_state() -> dict:
+        await supervisor.clear_persisted_state()
+        return {"cleared": True, "effective_after_restart": True}
 
     @app.get("/metrics")
     async def metrics(request: Request) -> Response:

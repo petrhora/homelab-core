@@ -9,12 +9,12 @@ from homelab_core.runtime.supervisor import Supervisor
 
 
 @pytest.mark.asyncio
-async def test_read_only_api(monkeypatch):
+async def test_read_only_api(monkeypatch, tmp_path):
     async def unavailable_spi(self):
         raise RuntimeError("SPI device unavailable")
 
     monkeypatch.setattr(Ws2812SpiDevice, "clear", unavailable_spi)
-    supervisor = Supervisor(AppConfig())
+    supervisor = Supervisor(AppConfig(persistence_path=tmp_path / "state.json"))
     await supervisor.start()
     try:
         async with AsyncClient(transport=ASGITransport(app=create_app(supervisor)), base_url="http://test") as client:
@@ -35,6 +35,10 @@ async def test_read_only_api(monkeypatch):
             assert "cmdline" not in processes.json()["items"][0]
             rgb = await client.get("/api/v1/rgb")
             assert rgb.status_code == 200
+            oled = await client.get("/api/v1/oled")
+            assert oled.status_code == 200
+            oled_update = await client.post("/api/v1/oled", json={"enabled": False})
+            assert oled_update.status_code == 200
             fans = await client.get("/api/v1/fans")
             assert fans.status_code == 200
             assert fans.json()["actual"]["led"]["output_enabled"] is False
@@ -78,6 +82,66 @@ async def test_lighting_update_reports_hardware_failure(monkeypatch):
 
     assert response.status_code == 503
     assert response.json()["detail"] == "RGB unavailable"
+
+
+@pytest.mark.asyncio
+async def test_update_reports_persistence_failure(monkeypatch, tmp_path):
+    supervisor = Supervisor(AppConfig(persistence_path=tmp_path / "state.json"))
+    await supervisor.start()
+
+    async def unavailable(*args, **kwargs):
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr(supervisor.persistence, "update", unavailable)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=create_app(supervisor)), base_url="http://test") as client:
+            response = await client.post("/api/v1/lighting", json={"enabled": False})
+    finally:
+        await supervisor.stop()
+
+    assert response.status_code == 503
+    assert "Could not persist lighting state" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_api_updates_are_persisted_and_can_be_cleared(tmp_path):
+    supervisor = Supervisor(AppConfig(persistence_path=tmp_path / "state.json"))
+    await supervisor.start()
+    try:
+        async with AsyncClient(transport=ASGITransport(app=create_app(supervisor)), base_url="http://test") as client:
+            response = await client.post("/api/v1/lighting", json={"enabled": False, "timezone": "Europe/Prague"})
+            assert response.status_code == 200
+            assert (tmp_path / "state.json").exists()
+            assert "lighting" in (tmp_path / "state.json").read_text()
+
+            cleared = await client.delete("/api/v1/state")
+            assert cleared.status_code == 200
+            assert cleared.json() == {"cleared": True, "effective_after_restart": True}
+            assert not (tmp_path / "state.json").exists()
+    finally:
+        await supervisor.stop()
+
+
+@pytest.mark.asyncio
+async def test_oled_api_update_is_persisted_and_restored(tmp_path):
+    config = AppConfig(persistence_path=tmp_path / "state.json")
+    supervisor = Supervisor(config)
+    await supervisor.start()
+    try:
+        async with AsyncClient(transport=ASGITransport(app=create_app(supervisor)), base_url="http://test") as client:
+            response = await client.post("/api/v1/oled", json={"enabled": False, "sleep_timeout_seconds": 30})
+            assert response.status_code == 200
+    finally:
+        await supervisor.stop()
+
+    restored = Supervisor(config)
+    await restored.start()
+    try:
+        desired = (await restored.managers["oled"].snapshot())["desired"]
+        assert desired["enabled"] is False
+        assert desired["sleep_timeout_seconds"] == 30
+    finally:
+        await restored.stop()
 
 
 @pytest.mark.parametrize("pattern", [

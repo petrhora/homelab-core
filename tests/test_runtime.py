@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import json
 import sys
 import time
 import types
@@ -11,21 +12,27 @@ import pytest
 import homelab_core.managers.rgb as rgb_module
 import homelab_core.managers.system as system_module
 import homelab_core.managers.lighting as lighting_module
+import homelab_core.managers.oled as oled_module
 import homelab_core.runtime.system_actions as system_actions_module
 from homelab_core.config import (AppConfig, ExternalFanConfig, FanLedConfig, FansConfig, LightingConfig,
-                                 LightingWindowConfig, RgbConfig, load_config)
+                                 LightingWindowConfig, OledConfig, RgbConfig, load_config)
 from homelab_core.devices.fan import GpioFanDevice
 from homelab_core.devices.interfaces import FakeFanDevice, FakeRgbDevice
+from homelab_core.devices.oled import FakeOledDevice
+from homelab_core.devices.ssd1306 import Ssd1306I2cDevice
 from homelab_core.devices.ws2812 import Ws2812SpiDevice
 from homelab_core.managers.base import Manager
 from homelab_core.managers.fans import FanManager
 from homelab_core.managers.lighting import LightingManager
 from homelab_core.managers.rgb import RgbManager
 from homelab_core.managers.system import SystemManager
+from homelab_core.managers.oled import OledManager
+from homelab_core.oled_renderer import render_status
 from homelab_core.rgb_patterns import apply_brightness, normalize_pattern
 from homelab_core.runtime.commands import Command, CommandBus, CommandBusClosedError, CommandTimeoutError
 from homelab_core.runtime.events import Event, EventBus, EventBusClosedError
 from homelab_core.runtime.state import StateStore
+from homelab_core.runtime.persistence import PersistenceStore
 from homelab_core.runtime.supervisor import Supervisor
 from homelab_core.runtime.system_actions import SystemctlActions
 
@@ -36,6 +43,165 @@ def test_default_config(tmp_path):
     assert config.api.port == 8000
     assert config.rgb.led_count == 4
     assert config.fans.enabled is False
+    assert config.oled.address == "auto"
+
+
+def test_oled_renderer_returns_rotatable_ssd1306_frame():
+    snapshot = {"hostname": "pi", "cpu_usage_ratio": 0.5, "cpu_temperature_celsius": 42,
+                "memory": {"used_ratio": 0.25}}
+    frame = render_status(snapshot)
+    rotated = render_status(snapshot, rotation=180)
+    assert len(frame) == 128 * 64 // 8
+    assert any(frame)
+    assert any(rotated)
+    assert frame != rotated
+
+
+@pytest.mark.asyncio
+async def test_oled_manager_renders_and_cleans_up():
+    device = FakeOledDevice()
+    state = StateStore()
+    await state.update("system", {"hostname": "pi", "cpu_usage_ratio": 0.2,
+                                   "cpu_temperature_celsius": None, "memory": {"used_ratio": 0.4}})
+    manager = OledManager(OledConfig(enabled=True, refresh_interval_seconds=60), state, device)
+    await manager.start()
+    assert (await manager.health())["status"] == "ready"
+    assert len(device.frames) == 1
+    original_shutdown_duration = oled_module.SHUTDOWN_SCREEN_SECONDS
+    oled_module.SHUTDOWN_SCREEN_SECONDS = 0
+    try:
+        await manager.stop()
+    finally:
+        oled_module.SHUTDOWN_SCREEN_SECONDS = original_shutdown_duration
+    assert device.closed
+
+
+@pytest.mark.asyncio
+async def test_disabled_oled_never_touches_its_device():
+    device = FakeOledDevice()
+    manager = OledManager(OledConfig(enabled=False), StateStore(), device)
+
+    await manager.start()
+    await manager.stop()
+
+    assert device.frames == []
+    assert device.enabled is False
+    assert device.closed
+
+
+@pytest.mark.asyncio
+async def test_oled_sleep_wakes_before_rendering():
+    device = FakeOledDevice()
+    manager = OledManager(OledConfig(enabled=True, refresh_interval_seconds=0.001, sleep_timeout_seconds=0.001),
+                          StateStore(), device)
+    await manager.start()
+
+    async def wait_for_sleep():
+        while (await manager.snapshot())["actual"]["enabled"]:
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(wait_for_sleep(), 1)
+    await manager.wake()
+    assert (await manager.snapshot())["actual"]["enabled"] is True
+
+    original_shutdown_duration = oled_module.SHUTDOWN_SCREEN_SECONDS
+    oled_module.SHUTDOWN_SCREEN_SECONDS = 0
+    try:
+        await manager.stop()
+    finally:
+        oled_module.SHUTDOWN_SCREEN_SECONDS = original_shutdown_duration
+
+
+@pytest.mark.asyncio
+async def test_oled_failed_command_preserves_desired_state():
+    class FailingOled(FakeOledDevice):
+        fail = False
+
+        async def display(self, frame):
+            if self.fail:
+                raise RuntimeError("I2C unavailable")
+            await super().display(frame)
+
+    device = FailingOled()
+    manager = OledManager(OledConfig(enabled=True), StateStore(), device)
+    await manager.start()
+    device.fail = True
+
+    with pytest.raises(RuntimeError, match="I2C unavailable"):
+        await manager.execute(Command("oled.update", "oled-device", {"sleep_timeout_seconds": 30}, "test", 1))
+
+    assert (await manager.snapshot())["desired"]["sleep_timeout_seconds"] == 0
+    original_shutdown_duration = oled_module.SHUTDOWN_SCREEN_SECONDS
+    oled_module.SHUTDOWN_SCREEN_SECONDS = 0
+    try:
+        await manager.stop()
+    finally:
+        oled_module.SHUTDOWN_SCREEN_SECONDS = original_shutdown_duration
+
+
+@pytest.mark.asyncio
+async def test_ssd1306_detects_second_address_and_writes_framed_pages(monkeypatch):
+    class Bus:
+        def __init__(self, number):
+            self.number = number
+            self.commands = []
+            self.blocks = []
+            self.probes = []
+            self.closed = False
+
+        def write_quick(self, address):
+            self.probes.append(address)
+            if address == 0x3C:
+                raise OSError("not present")
+
+        def write_byte_data(self, address, control, value):
+            self.commands.append((address, control, value))
+
+        def write_i2c_block_data(self, address, control, values):
+            self.blocks.append((address, control, values))
+
+        def close(self):
+            self.closed = True
+
+    buses = []
+
+    def open_bus(number):
+        bus = Bus(number)
+        buses.append(bus)
+        return bus
+
+    monkeypatch.setitem(sys.modules, "smbus2", types.SimpleNamespace(SMBus=open_bus))
+    device = Ssd1306I2cDevice()
+    await device.display(bytes(1024))
+    await device.close()
+
+    assert len(buses) == 1
+    assert buses[0].number == 1
+    assert buses[0].probes == [0x3C, 0x3D]
+    assert all(address == 0x3D and control == 0x40 and len(data) == 16 for address, control, data in buses[0].blocks)
+    assert len(buses[0].blocks) == 64
+    assert buses[0].closed
+
+
+@pytest.mark.asyncio
+async def test_persistence_store_writes_atomically_and_round_trips(tmp_path):
+    path = tmp_path / "state.json"
+    store = PersistenceStore(path)
+
+    await store.update("rgb", {"enabled": True, "brightness": 0.5})
+
+    assert json.loads(path.read_text()) == {"rgb": {"brightness": 0.5, "enabled": True}}
+    assert await store.load() == {"rgb": {"brightness": 0.5, "enabled": True}}
+    assert list(tmp_path.glob(".*")) == []
+
+
+@pytest.mark.asyncio
+async def test_persistence_store_rejects_invalid_shape(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text("[]")
+
+    with pytest.raises(ValueError, match="must contain an object"):
+        await PersistenceStore(path).load()
 
 
 def test_invalid_fan_temperature_thresholds_are_rejected():

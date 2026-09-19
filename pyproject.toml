@@ -19,7 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["httpx>=0.27,<1", "pytest>=8,<9", "pytest-asyncio>=0.24,<1"]
-hardware = ["spidev>=3.6,<4", "rpi-lgpio>=0.6,<1", "evdev>=1.7,<2"]
+hardware = ["spidev>=3.6,<4", "rpi-lgpio>=0.6,<1", "evdev>=1.7,<2", "smbus2>=0.5,<1"]
 
 [project.scripts]
 homelab-core = "homelab_core.main:run"
