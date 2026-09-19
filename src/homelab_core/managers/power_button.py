@@ -20,13 +20,15 @@ class PowerButtonManager(Manager):
     def __init__(self, config: PowerButtonConfig, state: StateStore, events: EventBus,
                  device: PowerButtonDevice | None = None,
                  system_actions: SystemActions | None = None,
-                 prepare_shutdown: Callable[[str], Awaitable[None]] | None = None) -> None:
+                 prepare_shutdown: Callable[[str], Awaitable[None]] | None = None,
+                 wake_oled: Callable[[], Awaitable[None]] | None = None) -> None:
         self.config = config
         self.state = state
         self.events = events
         self.device = device or EvdevPowerButtonDevice(config.device_name, config.device_path)
         self.system_actions = system_actions or SystemctlActions()
         self.prepare_shutdown = prepare_shutdown
+        self.wake_oled = wake_oled
         self._status = ManagerStatus.STARTING
         self._error: str | None = None
         self._error_count = 0
@@ -139,6 +141,8 @@ class PowerButtonManager(Manager):
             await asyncio.sleep(self.config.double_click_window_ms / 1000)
             if self._click_count == 1:
                 await self._emit("click")
+                if self.wake_oled is not None:
+                    await self.wake_oled()
             self._click_count = 0
         except asyncio.CancelledError:
             raise

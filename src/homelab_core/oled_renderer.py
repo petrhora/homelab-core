@@ -1,3 +1,4 @@
+import ipaddress
 from typing import Any, Mapping
 
 
@@ -27,11 +28,38 @@ def _put_pixel(frame: bytearray, x: int, y: int, width: int, height: int) -> Non
 def _text(frame: bytearray, text: str, x: int, y: int, width: int, height: int) -> None:
     for character in text.upper():
         glyph = _FONT.get(character, _FONT[" "])
-        for column, bits in enumerate(glyph):
-            for row in range(7):
-                if bits & (1 << row):
-                    _put_pixel(frame, x + column, y + row, width, height)
+        for source_x, bits in enumerate(glyph):
+            for source_y in range(5):
+                if bits & (1 << source_y):
+                    _put_pixel(frame, x + 4 - source_y, y + source_x, width, height)
         x += 6
+
+
+def _root_disk_usage(storage: Any) -> float:
+    if not isinstance(storage, list):
+        return 0
+    for disk in storage:
+        if isinstance(disk, Mapping) and disk.get("mountpoint") == "/":
+            return float(disk.get("used_ratio", 0))
+    return 0
+
+
+def _primary_ipv4(interfaces: Any) -> str:
+    if not isinstance(interfaces, Mapping):
+        return "--"
+    for addresses in interfaces.values():
+        if not isinstance(addresses, list):
+            continue
+        for address in addresses:
+            if not isinstance(address, Mapping):
+                continue
+            try:
+                candidate = ipaddress.ip_address(str(address.get("address", "")))
+            except ValueError:
+                continue
+            if candidate.version == 4 and not candidate.is_loopback:
+                return str(candidate)
+    return "--"
 
 
 def render_status(snapshot: Mapping[str, Any], width: int = 128, height: int = 64, rotation: int = 0) -> bytes:
@@ -40,10 +68,14 @@ def render_status(snapshot: Mapping[str, Any], width: int = 128, height: int = 6
     memory = snapshot.get("memory", {})
     temperature = snapshot.get("cpu_temperature_celsius")
     temp_text = "--" if temperature is None else f"{temperature:.0f}C"
+    ip_address = _primary_ipv4(snapshot.get("network_interfaces"))
+    hostname = str(snapshot.get("hostname", ""))
+    hostname = hostname[:max(0, 21 - len(ip_address) - 3)]
     lines = (
-        f"CPU {snapshot.get('cpu_usage_ratio', 0) * 100:3.0f}% TEMP {temp_text}",
-        f"RAM {memory.get('used_ratio', 0) * 100:3.0f}%",
-        f"HOST {snapshot.get('hostname', '')[:15]}",
+        f"CPU {snapshot.get('cpu_usage_ratio', 0) * 100:3.0f}% RAM {memory.get('used_ratio', 0) * 100:3.0f}%",
+        f"DSK {_root_disk_usage(snapshot.get('storage')) * 100:3.0f}% TMP {temp_text}",
+        "",
+        f"{hostname} - {ip_address}",
     )
     frame = bytearray(width * height // 8)
     for index, line in enumerate(lines):

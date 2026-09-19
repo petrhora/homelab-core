@@ -39,6 +39,11 @@ class EvdevPowerButtonDevice(PowerButtonDevice):
                 continue
             device = InputDevice(candidate)
             if device.name == self.name:
+                try:
+                    device.grab()
+                except Exception:
+                    device.close()
+                    raise
                 self._device = device
                 return
             device.close()
@@ -56,8 +61,11 @@ class EvdevPowerButtonDevice(PowerButtonDevice):
 
     async def close(self) -> None:
         if self._device is not None:
-            self._device.close()
-            self._device = None
+            try:
+                self._device.ungrab()
+            finally:
+                self._device.close()
+                self._device = None
 
 
 class FakePowerButtonDevice(PowerButtonDevice):

@@ -27,7 +27,7 @@ from homelab_core.managers.lighting import LightingManager
 from homelab_core.managers.rgb import RgbManager
 from homelab_core.managers.system import SystemManager
 from homelab_core.managers.oled import OledManager
-from homelab_core.oled_renderer import render_status
+from homelab_core.oled_renderer import _primary_ipv4, _root_disk_usage, _text, render_status
 from homelab_core.rgb_patterns import apply_brightness, normalize_pattern
 from homelab_core.runtime.commands import Command, CommandBus, CommandBusClosedError, CommandTimeoutError
 from homelab_core.runtime.events import Event, EventBus, EventBusClosedError
@@ -44,17 +44,35 @@ def test_default_config(tmp_path):
     assert config.rgb.led_count == 4
     assert config.fans.enabled is False
     assert config.oled.address == "auto"
+    assert config.oled.sleep_timeout_seconds == 15
 
 
 def test_oled_renderer_returns_rotatable_ssd1306_frame():
     snapshot = {"hostname": "pi", "cpu_usage_ratio": 0.5, "cpu_temperature_celsius": 42,
-                "memory": {"used_ratio": 0.25}}
+                "memory": {"used_ratio": 0.25}, "storage": [{"mountpoint": "/", "used_ratio": 0.75}],
+                "network_interfaces": {"eth0": [{"address": "192.168.1.42"}]}}
     frame = render_status(snapshot)
     rotated = render_status(snapshot, rotation=180)
     assert len(frame) == 128 * 64 // 8
     assert any(frame)
     assert any(rotated)
     assert frame != rotated
+
+
+def test_oled_renderer_selects_root_disk_and_primary_ipv4():
+    storage = [{"mountpoint": "/boot", "used_ratio": 0.1}, {"mountpoint": "/", "used_ratio": 0.75}]
+    interfaces = {"lo": [{"address": "127.0.0.1"}], "eth0": [{"address": "192.168.1.42"}]}
+
+    assert _root_disk_usage(storage) == 0.75
+    assert _primary_ipv4(interfaces) == "192.168.1.42"
+
+
+def test_oled_glyphs_rotate_clockwise():
+    frame = bytearray(128 * 64 // 8)
+    _text(frame, "L", 0, 0, 128, 64)
+
+    assert all(frame[(y // 8) * 128] & (1 << (y % 8)) for y in range(5))
+    assert all(frame[x + (4 // 8) * 128] & (1 << (4 % 8)) for x in range(5))
 
 
 @pytest.mark.asyncio

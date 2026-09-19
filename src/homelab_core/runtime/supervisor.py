@@ -43,7 +43,7 @@ class Supervisor:
             "lighting": lighting,
             "oled": oled,
             "power_button": PowerButtonManager(config.power_button, self.state, self.events,
-                                                prepare_shutdown=self.prepare_power_shutdown),
+                                                prepare_shutdown=self.prepare_power_shutdown, wake_oled=oled.wake),
         }
         self.commands.register("rgb.update", self.managers["rgb"].execute, resource_id="rgb-device")  # type: ignore[attr-defined]
         self.commands.register("fans.update", self.managers["fans"].execute, resource_id="fan-gpio")  # type: ignore[attr-defined]

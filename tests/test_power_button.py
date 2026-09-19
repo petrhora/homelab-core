@@ -1,9 +1,11 @@
 import asyncio
+import sys
+import types
 
 import pytest
 
 from homelab_core.config import AppConfig, PowerButtonConfig
-from homelab_core.devices.power_button import FakePowerButtonDevice
+from homelab_core.devices.power_button import EvdevPowerButtonDevice, FakePowerButtonDevice
 from homelab_core.managers.power_button import PowerButtonManager
 from homelab_core.runtime.events import EventBus
 from homelab_core.runtime.state import StateStore
@@ -38,6 +40,66 @@ async def test_power_button_emits_single_click():
     assert event.type == "power_button.click"
     assert (await manager.snapshot())["last_event"]["type"] == "click"
     await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_power_button_single_click_wakes_oled():
+    device = FakePowerButtonDevice()
+    wake_calls = 0
+    woke = asyncio.Event()
+
+    async def wake_oled():
+        nonlocal wake_calls
+        wake_calls += 1
+        woke.set()
+
+    manager = PowerButtonManager(
+        PowerButtonConfig(enabled=True, debounce_ms=0, double_click_window_ms=100),
+        StateStore(), EventBus(), device, FakeSystemActions(), wake_oled=wake_oled,
+    )
+    await manager.start()
+    await device.press()
+    await device.release()
+    await asyncio.wait_for(woke.wait(), 1)
+
+    assert wake_calls == 1
+    await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_evdev_power_button_grabs_and_releases_device(monkeypatch):
+    class InputDevice:
+        instances = []
+
+        def __init__(self, path):
+            self.path = path
+            self.name = "pwr_button"
+            self.grabbed = False
+            self.ungrabbed = False
+            self.closed = False
+            self.instances.append(self)
+
+        def grab(self):
+            self.grabbed = True
+
+        def ungrab(self):
+            self.ungrabbed = True
+
+        def close(self):
+            self.closed = True
+
+    module = types.ModuleType("evdev")
+    module.InputDevice = InputDevice
+    module.list_devices = lambda: ["/dev/input/event0"]
+    monkeypatch.setitem(sys.modules, "evdev", module)
+    device = EvdevPowerButtonDevice("pwr_button")
+
+    await device.open()
+    await device.close()
+
+    assert InputDevice.instances[0].grabbed
+    assert InputDevice.instances[0].ungrabbed
+    assert InputDevice.instances[0].closed
 
 
 @pytest.mark.asyncio

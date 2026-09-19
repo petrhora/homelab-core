@@ -41,15 +41,15 @@ enabled = true
 bus = 1
 address = "auto"
 refresh_interval_seconds = 1.0
-sleep_timeout_seconds = 30
+sleep_timeout_seconds = 15
 rotation = 0
 ```
 
 Install `.[hardware]` for OLED support, enable I2C on the Raspberry Pi, and do
 not run another service that owns the same I2C device. The initial display page
-shows CPU usage, temperature, memory usage, and hostname. OLED API updates are
-persisted in `/var/lib/homelab-core/state.json` and restored after restart; the
-display is cleared during shutdown.
+shows CPU, memory, and root-disk usage, CPU temperature, and the primary IPv4
+address. OLED API updates are persisted in `/var/lib/homelab-core/state.json`
+and restored after restart; the display is cleared during shutdown.
 
 To enable the local WS2812 strip on a Raspberry Pi, install the hardware dependency
 and create `/etc/homelab-core/config.toml`:
@@ -110,7 +110,7 @@ long_press_ms = 3000
 long_press_action = "shutdown"
 ```
 
-The manager publishes click, double-click, and long-press events for future consumers. A long press requests an orderly system shutdown through `systemctl`; configure the service account with the required systemd or polkit authorization. Install `.[hardware]`, grant the service account access to the `input` group, and do not let another process own the input device.
+A single click wakes the OLED display, while a long press requests an orderly system shutdown through `systemctl`. The manager also publishes click, double-click, and long-press events for future consumers. Configure the service account with the required systemd or polkit authorization. Install `.[hardware]`, grant the service account access to the `input` group, and do not let another process own the input device.
 
 RGB patterns can use a uniform color or an independently configured pixel frame:
 

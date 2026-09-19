@@ -49,7 +49,7 @@ class OledConfig(BaseModel):
     bus: int = Field(default=1, ge=0, le=31)
     address: Literal["auto", "0x3c", "0x3d"] = "auto"
     refresh_interval_seconds: float = Field(default=1.0, gt=0, le=60)
-    sleep_timeout_seconds: float = Field(default=0, ge=0, le=3600)
+    sleep_timeout_seconds: float = Field(default=15, ge=0, le=3600)
     rotation: Literal[0, 180] = 0
 
 
