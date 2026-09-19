@@ -29,6 +29,7 @@ class Supervisor:
         self.persistence = PersistenceStore(config.persistence_path)
         self.commands = CommandBus()
         self.events = EventBus()
+        self._hardware_stop_lock = asyncio.Lock()
         lighting = LightingManager(config.lighting, self.state, self.commands)
         schedule_allowed = lighting.allowed_now()
         rgb = RgbManager(config.rgb, self.state, schedule_allowed=schedule_allowed)
@@ -41,7 +42,8 @@ class Supervisor:
             "fans": fans,
             "lighting": lighting,
             "oled": oled,
-            "power_button": PowerButtonManager(config.power_button, self.state, self.events),
+            "power_button": PowerButtonManager(config.power_button, self.state, self.events,
+                                                prepare_shutdown=self.prepare_power_shutdown),
         }
         self.commands.register("rgb.update", self.managers["rgb"].execute, resource_id="rgb-device")  # type: ignore[attr-defined]
         self.commands.register("fans.update", self.managers["fans"].execute, resource_id="fan-gpio")  # type: ignore[attr-defined]
@@ -70,12 +72,25 @@ class Supervisor:
 
     async def stop(self) -> None:
         await self.commands.shutdown()
-        for manager in reversed(list(self.managers.values())):
-            try:
-                await manager.stop()
-            except Exception as error:
-                logger.warning("Failed to stop %s manager: %s", manager.name, error)
+        await self._stop_hardware()
         self.events.close()
+
+    async def prepare_power_shutdown(self, action: str) -> None:
+        """Clear hardware before systemd powers off or reboots the host."""
+        logger.info("Preparing hardware for system %s", action)
+        await self.commands.shutdown()
+        await self._stop_hardware(exclude={"power_button"})
+
+    async def _stop_hardware(self, exclude: set[str] | None = None) -> None:
+        excluded = exclude or set()
+        async with self._hardware_stop_lock:
+            for name, manager in reversed(list(self.managers.items())):
+                if name in excluded:
+                    continue
+                try:
+                    await manager.stop()
+                except Exception as error:
+                    logger.warning("Failed to stop %s manager: %s", manager.name, error)
 
     async def _restore_persisted_state(self) -> None:
         try:

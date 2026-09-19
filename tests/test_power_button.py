@@ -84,6 +84,35 @@ async def test_power_button_long_press_requests_shutdown_once():
 
 
 @pytest.mark.asyncio
+async def test_power_button_prepares_hardware_before_shutdown():
+    device = FakePowerButtonDevice()
+    actions = FakeSystemActions()
+    events = EventBus()
+    order = []
+
+    async def prepare(action):
+        order.append(action)
+
+    original_shutdown = actions.shutdown
+
+    async def shutdown():
+        order.append("poweroff")
+        await original_shutdown()
+
+    actions.shutdown = shutdown
+    manager = PowerButtonManager(
+        PowerButtonConfig(enabled=True, debounce_ms=0, long_press_ms=1),
+        StateStore(), events, device, actions, prepare,
+    )
+    await manager.start()
+    await device.press()
+    await asyncio.sleep(0.05)
+
+    assert order == ["shutdown", "poweroff"]
+    await manager.stop()
+
+
+@pytest.mark.asyncio
 async def test_power_button_release_does_not_cancel_dispatched_shutdown():
     class BlockingSystemActions:
         def __init__(self):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from ..config import PowerButtonConfig
@@ -18,12 +19,14 @@ class PowerButtonManager(Manager):
 
     def __init__(self, config: PowerButtonConfig, state: StateStore, events: EventBus,
                  device: PowerButtonDevice | None = None,
-                 system_actions: SystemActions | None = None) -> None:
+                 system_actions: SystemActions | None = None,
+                 prepare_shutdown: Callable[[str], Awaitable[None]] | None = None) -> None:
         self.config = config
         self.state = state
         self.events = events
         self.device = device or EvdevPowerButtonDevice(config.device_name, config.device_path)
         self.system_actions = system_actions or SystemctlActions()
+        self.prepare_shutdown = prepare_shutdown
         self._status = ManagerStatus.STARTING
         self._error: str | None = None
         self._error_count = 0
@@ -151,8 +154,12 @@ class PowerButtonManager(Manager):
             await self._emit("long_press")
             action = self.config.long_press_action
             if action == "shutdown":
+                if self.prepare_shutdown is not None:
+                    await self.prepare_shutdown(action)
                 await self.system_actions.shutdown()
             elif action == "reboot":
+                if self.prepare_shutdown is not None:
+                    await self.prepare_shutdown(action)
                 await self.system_actions.reboot()
         except asyncio.CancelledError:
             raise

@@ -8,6 +8,7 @@ Type=simple
 ExecStart=/usr/bin/homelab-core
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=30
 User=homelab
 Group=homelab
 SupplementaryGroups=spi gpio i2c input
