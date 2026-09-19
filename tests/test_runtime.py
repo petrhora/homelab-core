@@ -3,17 +3,23 @@ import contextlib
 import sys
 import time
 import types
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
 import homelab_core.managers.rgb as rgb_module
 import homelab_core.managers.system as system_module
-from homelab_core.config import AppConfig, ExternalFanConfig, FanLedConfig, FansConfig, RgbConfig, load_config
+import homelab_core.managers.lighting as lighting_module
+import homelab_core.runtime.system_actions as system_actions_module
+from homelab_core.config import (AppConfig, ExternalFanConfig, FanLedConfig, FansConfig, LightingConfig,
+                                 LightingWindowConfig, RgbConfig, load_config)
 from homelab_core.devices.fan import GpioFanDevice
 from homelab_core.devices.interfaces import FakeFanDevice, FakeRgbDevice
 from homelab_core.devices.ws2812 import Ws2812SpiDevice
 from homelab_core.managers.base import Manager
 from homelab_core.managers.fans import FanManager
+from homelab_core.managers.lighting import LightingManager
 from homelab_core.managers.rgb import RgbManager
 from homelab_core.managers.system import SystemManager
 from homelab_core.rgb_patterns import apply_brightness, normalize_pattern
@@ -21,6 +27,7 @@ from homelab_core.runtime.commands import Command, CommandBus, CommandBusClosedE
 from homelab_core.runtime.events import Event, EventBus, EventBusClosedError
 from homelab_core.runtime.state import StateStore
 from homelab_core.runtime.supervisor import Supervisor
+from homelab_core.runtime.system_actions import SystemctlActions
 
 
 def test_default_config(tmp_path):
@@ -34,6 +41,154 @@ def test_default_config(tmp_path):
 def test_invalid_fan_temperature_thresholds_are_rejected():
     with pytest.raises(ValueError):
         FansConfig(external=ExternalFanConfig(on_temperature_c=50, off_temperature_c=55))
+
+
+def test_lighting_config_rejects_invalid_timezone_and_windows():
+    with pytest.raises(ValueError):
+        LightingConfig(timezone="not/a-timezone")
+    with pytest.raises(ValueError):
+        LightingWindowConfig(start="12:00", end="12:00")
+    with pytest.raises(ValueError):
+        LightingWindowConfig(start="12:00", end="13:00", days=[])
+
+
+def test_lighting_schedule_supports_weekdays_and_overnight_windows():
+    config = LightingConfig(enabled=True, timezone="Europe/Prague", windows=[
+        LightingWindowConfig(start="22:00", end="01:00", days=["mon"]),
+    ])
+    manager = LightingManager(config, StateStore(), CommandBus())
+    timezone = ZoneInfo("Europe/Prague")
+
+    assert manager._is_allowed(datetime(2026, 1, 5, 23, 0, tzinfo=timezone))
+    assert manager._is_allowed(datetime(2026, 1, 6, 0, 30, tzinfo=timezone))
+    assert not manager._is_allowed(datetime(2026, 1, 6, 1, 0, tzinfo=timezone))
+    assert not manager._is_allowed(datetime(2026, 1, 6, 22, 30, tzinfo=timezone))
+
+
+def test_lighting_schedule_uses_first_occurrence_for_dst_fallback_boundary():
+    config = LightingConfig(enabled=True, timezone="Europe/Prague", windows=[
+        LightingWindowConfig(start="01:00", end="02:30"),
+    ])
+    manager = LightingManager(config, StateStore(), CommandBus())
+    timezone = ZoneInfo("Europe/Prague")
+
+    assert manager._is_allowed(datetime(2026, 10, 25, 2, 15, tzinfo=timezone, fold=0))
+    assert not manager._is_allowed(datetime(2026, 10, 25, 2, 15, tzinfo=timezone, fold=1))
+
+
+@pytest.mark.asyncio
+async def test_lighting_retries_failed_reconciliation(monkeypatch):
+    monkeypatch.setattr(lighting_module, "RETRY_SECONDS", 0.001)
+    commands = CommandBus()
+    rgb_attempts = 0
+    fan_attempts = 0
+
+    async def update_rgb(command):
+        nonlocal rgb_attempts
+        rgb_attempts += 1
+        if rgb_attempts == 1:
+            raise RuntimeError("RGB unavailable")
+
+    async def update_fan(command):
+        nonlocal fan_attempts
+        fan_attempts += 1
+
+    commands.register("rgb.schedule", update_rgb, resource_id="rgb-device")
+    commands.register("fans.schedule", update_fan, resource_id="fan-gpio")
+    manager = LightingManager(LightingConfig(enabled=True, windows=[]), StateStore(), commands)
+    await manager.start()
+
+    while (await manager.health())["status"] != "ready":
+        await asyncio.sleep(0)
+    assert rgb_attempts == 2
+    assert fan_attempts == 1
+    await manager.stop()
+    await commands.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_lighting_schedule_gates_rgb_and_fan_led_but_not_fan_motor():
+    async def read_temperature():
+        return 60.0
+
+    fan_device = FakeFanDevice()
+    fan = FanManager(FansConfig(enabled=True, external=ExternalFanConfig(mode="auto"), led=FanLedConfig(mode="on")),
+                     StateStore(), fan_device, read_temperature)
+    rgb_device = FakeRgbDevice()
+    rgb = RgbManager(RgbConfig(enabled=True, led_count=2), StateStore(), rgb_device)
+    await fan.start()
+    await rgb.start()
+    commands = CommandBus()
+    commands.register("rgb.schedule", lambda command: rgb.set_schedule_allowed(command.payload["allowed"]),
+                      resource_id="rgb-device")
+    commands.register("fans.schedule", lambda command: fan.set_schedule_allowed(command.payload["allowed"]),
+                      resource_id="fan-gpio")
+    config = LightingConfig(enabled=True, windows=[])
+    manager = LightingManager(config, StateStore(), commands)
+
+    await manager.start()
+
+    assert fan_device.fan_enabled is True
+    assert fan_device.led_enabled is False
+    assert rgb_device.pixels == [(0, 0, 0), (0, 0, 0)]
+    await manager.stop()
+    await commands.shutdown()
+    await fan.stop()
+    await rgb.stop()
+
+
+@pytest.mark.asyncio
+async def test_rgb_starts_off_when_schedule_disallows_lighting():
+    class RecordingDevice(FakeRgbDevice):
+        def __init__(self) -> None:
+            super().__init__()
+            self.frames = 0
+
+        async def set_pixels(self, pixels):
+            self.frames += 1
+            await super().set_pixels(pixels)
+
+    device = RecordingDevice()
+    manager = RgbManager(RgbConfig(enabled=True, led_count=2), StateStore(), device, schedule_allowed=False)
+    await manager.start()
+
+    assert device.frames == 0
+    assert device.pixels == []
+    await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_lighting_schedule_update_immediately_restores_leds():
+    async def read_temperature():
+        return 60.0
+
+    fan_device = FakeFanDevice()
+    fan = FanManager(FansConfig(enabled=True, external=ExternalFanConfig(mode="auto"), led=FanLedConfig(mode="on")),
+                     StateStore(), fan_device, read_temperature)
+    rgb_device = FakeRgbDevice()
+    rgb = RgbManager(RgbConfig(enabled=True, led_count=2), StateStore(), rgb_device)
+    await fan.start()
+    await rgb.start()
+    commands = CommandBus()
+    commands.register("rgb.schedule", lambda command: rgb.set_schedule_allowed(command.payload["allowed"]),
+                      resource_id="rgb-device")
+    commands.register("fans.schedule", lambda command: fan.set_schedule_allowed(command.payload["allowed"]),
+                      resource_id="fan-gpio")
+    now = lambda timezone: datetime(2026, 1, 5, 6, 0, tzinfo=timezone)
+    manager = LightingManager(LightingConfig(enabled=True, windows=[]), StateStore(), commands, now)
+    await manager.start()
+
+    await manager.execute(Command("lighting.update", "lighting", {"windows": [
+        {"start": "05:00", "end": "07:00"},
+    ]}, "test", 1))
+
+    assert fan_device.fan_enabled is True
+    assert fan_device.led_enabled is True
+    assert rgb_device.pixels == [(255, 255, 255), (255, 255, 255)]
+    await manager.stop()
+    await commands.shutdown()
+    await fan.stop()
+    await rgb.stop()
 
 
 @pytest.mark.asyncio
@@ -553,6 +708,72 @@ async def test_command_bus_shutdown_drains_active_work_and_cancels_queued_work()
         await queued
     with pytest.raises(CommandBusClosedError):
         await bus.dispatch("fans.update", {})
+
+
+@pytest.mark.asyncio
+async def test_systemctl_timeout_terminates_and_reaps_process(monkeypatch):
+    class Process:
+        def __init__(self):
+            self.returncode = None
+            self.terminated = False
+            self.finished = asyncio.Event()
+
+        async def communicate(self):
+            await self.finished.wait()
+            return b"", b""
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+            self.finished.set()
+
+    process = Process()
+
+    async def create_subprocess(*args, **kwargs):
+        return process
+
+    monkeypatch.setattr(system_actions_module.asyncio, "create_subprocess_exec", create_subprocess)
+    monkeypatch.setattr(system_actions_module, "SYSTEMCTL_TIMEOUT_SECONDS", 0.001)
+
+    with pytest.raises(TimeoutError):
+        await SystemctlActions().shutdown()
+
+    assert process.terminated
+
+
+@pytest.mark.asyncio
+async def test_systemctl_cancellation_terminates_and_reaps_process(monkeypatch):
+    class Process:
+        def __init__(self):
+            self.returncode = None
+            self.terminated = False
+            self.started = asyncio.Event()
+            self.finished = asyncio.Event()
+
+        async def communicate(self):
+            self.started.set()
+            await self.finished.wait()
+            return b"", b""
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+            self.finished.set()
+
+    process = Process()
+
+    async def create_subprocess(*args, **kwargs):
+        return process
+
+    monkeypatch.setattr(system_actions_module.asyncio, "create_subprocess_exec", create_subprocess)
+    action = asyncio.create_task(SystemctlActions().shutdown())
+    await process.started.wait()
+    action.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await action
+
+    assert process.terminated
 
 
 @pytest.mark.asyncio

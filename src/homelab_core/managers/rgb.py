@@ -23,13 +23,15 @@ ANIMATION_RETRY_MAX_SECONDS = 5.0
 class RgbManager(Manager):
     name = "rgb"
 
-    def __init__(self, config: RgbConfig, state: StateStore, device: RgbDevice | None = None) -> None:
+    def __init__(self, config: RgbConfig, state: StateStore, device: RgbDevice | None = None,
+                 schedule_allowed: bool = True) -> None:
         self.config = config
         self.state = state
         self.device = device or Ws2812SpiDevice(config.spi_path, config.spi_speed_hz, config.led_count)
         self._status = ManagerStatus.STARTING
         self._error: str | None = None
         self._enabled = config.enabled
+        self._schedule_allowed = schedule_allowed
         self._brightness = config.brightness
         self._color = self.parse_color(config.color)
         self._led_count = config.led_count
@@ -45,7 +47,7 @@ class RgbManager(Manager):
 
     async def start(self) -> None:
         try:
-            if self._enabled:
+            if self._enabled and self._schedule_allowed:
                 self._actual, _ = await self._apply(self._pattern, self._led_count, self._brightness)
                 self._start_animation()
             else:
@@ -126,7 +128,7 @@ class RgbManager(Manager):
         committed = False
         try:
             await self._stop_animation()
-            if enabled:
+            if enabled and self._schedule_allowed:
                 actual, interrupted = await self._apply(candidate_pattern, led_count, brightness,
                                                         complete_on_cancel=True)
             else:
@@ -141,7 +143,7 @@ class RgbManager(Manager):
             self._pattern_started_at = time.monotonic()
             self._actual = actual
             committed = True
-            if self._enabled:
+            if self._enabled and self._schedule_allowed:
                 self._start_animation()
             self._record_success(command.type)
             self._status = ManagerStatus.READY
@@ -160,6 +162,31 @@ class RgbManager(Manager):
                 self._start_animation()
             await self._publish()
             raise
+        return await self._state()
+
+    async def set_schedule_allowed(self, allowed: bool) -> dict:
+        if allowed == self._schedule_allowed:
+            return await self._state()
+        previous_allowed = self._schedule_allowed
+        try:
+            await self._stop_animation()
+            if self._enabled and allowed:
+                self._actual, _ = await self._apply(self._pattern, self._led_count, self._brightness)
+                self._start_animation()
+            else:
+                await self.device.clear()
+                self._actual = self._off_state()
+            self._schedule_allowed = allowed
+            self._record_success("schedule")
+            self._status = ManagerStatus.READY
+        except Exception as error:
+            if previous_allowed and self._enabled:
+                self._start_animation()
+            self._record_error("schedule", error)
+            self._status = ManagerStatus.DEGRADED
+            raise
+        finally:
+            await self._publish()
         return await self._state()
 
     async def _apply(self, pattern: Pattern, led_count: int, brightness: float,
@@ -242,7 +269,9 @@ class RgbManager(Manager):
         await self.state.update(self.name, await self._state())
 
     async def _state(self) -> dict[str, Any]:
-        return {"desired": {"enabled": self._enabled, "color": "#%02X%02X%02X" % self._color,
+        return {"desired": {"enabled": self._enabled, "schedule_allowed": self._schedule_allowed,
+                              "schedule_suppressed": self._enabled and not self._schedule_allowed,
+                              "color": "#%02X%02X%02X" % self._color,
                              "brightness": self._brightness, "led_count": self._led_count,
                              "pattern": pattern_to_payload(self._pattern)},
                 "actual": self._actual, "operation": {"last": self._last_operation,

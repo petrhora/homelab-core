@@ -21,6 +21,9 @@ Endpoints are available at `http://127.0.0.1:8000`:
 - `POST /api/v1/rgb`
 - `GET /api/v1/fans`
 - `POST /api/v1/fans`
+- `GET /api/v1/lighting`
+- `POST /api/v1/lighting`
+- `GET /api/v1/power-button`
 - `GET /metrics`
 
 Configuration defaults to `/etc/homelab-core/config.toml`. Use `HOMELAB_CORE_CONFIG`
@@ -46,7 +49,46 @@ Pi OS, install `liblgpio-dev` first if it is not already present. Ensure SPI is
 enabled and the service account can access `/dev/spidev0.0`. Do not run another
 process that owns the same RGB hardware at the same time.
 
+Lighting can be limited to configured daily windows. The schedule gates both the
+WS2812 strip and the Pironman fan lighting, but never affects the external fan
+motor. `timezone` accepts an IANA timezone; omit it to use the server's local
+timezone. Windows that end before they start continue into the following day.
+
+```toml
+[lighting]
+enabled = true
+timezone = "Europe/Prague"
+
+[[lighting.windows]]
+start = "07:00"
+end = "23:30"
+days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+```
+
+Use `POST /api/v1/lighting` to change the schedule without restarting. These
+updates are runtime-only, like the RGB and fan APIs:
+
+```json
+{
+  "enabled": true,
+  "timezone": "Europe/Prague",
+  "windows": [{"start": "07:00", "end": "23:30", "days": ["mon", "tue", "wed", "thu", "fri"]}]
+}
+```
+
 Run tests with `pytest`.
+
+The physical power button is disabled by default. Enable it after verifying that Linux exposes an evdev device named `pwr_button`:
+
+```toml
+[power_button]
+enabled = true
+device_name = "pwr_button"
+long_press_ms = 3000
+long_press_action = "shutdown"
+```
+
+The manager publishes click, double-click, and long-press events for future consumers. A long press requests an orderly system shutdown through `systemctl`; configure the service account with the required systemd or polkit authorization. Install `.[hardware]`, grant the service account access to the `input` group, and do not let another process own the input device.
 
 RGB patterns can use a uniform color or an independently configured pixel frame:
 

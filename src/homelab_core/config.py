@@ -1,12 +1,16 @@
 from pathlib import Path
 import os
 import tomllib
+from datetime import time
 from typing import Annotated, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 
 RgbColor = Annotated[str, StringConstraints(pattern=r"^#[0-9A-Fa-f]{6}$")]
+TimeOfDay = Annotated[str, StringConstraints(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")]
+Weekday = Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 
 class ApiConfig(BaseModel):
@@ -68,6 +72,52 @@ class FansConfig(BaseModel):
             raise ValueError("fans.external.off_temperature_c must not exceed on_temperature_c")
 
 
+class LightingWindowConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    start: TimeOfDay
+    end: TimeOfDay
+    days: list[Weekday] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+    @model_validator(mode="after")
+    def validate_window(self) -> "LightingWindowConfig":
+        if self.start == self.end:
+            raise ValueError("lighting window start and end must differ")
+        if not self.days:
+            raise ValueError("lighting window days must not be empty")
+        if len(set(self.days)) != len(self.days):
+            raise ValueError("lighting window days must not contain duplicates")
+        return self
+
+
+class LightingConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    timezone: str | None = None
+    windows: list[LightingWindowConfig] = []
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError:
+            raise ValueError("lighting.timezone must be a valid IANA timezone") from None
+        return value
+
+
+class PowerButtonConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    device_name: str = "pwr_button"
+    device_path: str | None = None
+    debounce_ms: int = Field(default=50, ge=0, le=1000)
+    double_click_window_ms: int = Field(default=400, ge=100, le=5000)
+    long_press_ms: int = Field(default=3000, ge=500, le=60_000)
+    long_press_action: Literal["none", "shutdown", "reboot"] = "shutdown"
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     api: ApiConfig = ApiConfig()
@@ -75,6 +125,8 @@ class AppConfig(BaseModel):
     system: SystemConfig = SystemConfig()
     rgb: RgbConfig = RgbConfig()
     fans: FansConfig = FansConfig()
+    lighting: LightingConfig = LightingConfig()
+    power_button: PowerButtonConfig = PowerButtonConfig()
     metrics_enabled: bool = True
 
 

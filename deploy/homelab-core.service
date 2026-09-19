@@ -10,7 +10,7 @@ Restart=on-failure
 RestartSec=5
 User=homelab
 Group=homelab
-SupplementaryGroups=spi gpio
+SupplementaryGroups=spi gpio input
 NoNewPrivileges=true
 PrivateTmp=true
 

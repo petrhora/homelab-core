@@ -5,6 +5,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Gauge, generate_latest
 
+from ..config import LightingWindowConfig
 from ..runtime.commands import CommandTimeoutError
 from ..runtime.supervisor import Supervisor
 
@@ -119,6 +120,13 @@ class FanUpdate(BaseModel):
     led_mode: Literal["off", "on", "follow"] | None = None
 
 
+class LightingUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool | None = None
+    timezone: str | None = None
+    windows: list[LightingWindowConfig] | None = None
+
+
 def _validate_color(value: str) -> str:
     if len(value) != 7 or not value.startswith("#"):
         raise ValueError("color must be in #RRGGBB format")
@@ -175,6 +183,25 @@ def create_app(supervisor: Supervisor, metrics_enabled: bool = True) -> FastAPI:
     @app.get("/api/v1/fans")
     async def fans() -> dict:
         return await supervisor.managers["fans"].snapshot()
+
+    @app.get("/api/v1/lighting")
+    async def lighting() -> dict:
+        return await supervisor.managers["lighting"].snapshot()
+
+    @app.post("/api/v1/lighting")
+    async def update_lighting(update: LightingUpdate) -> dict:
+        try:
+            return await supervisor.commands.dispatch("lighting.update", update.model_dump(exclude_unset=True))
+        except CommandTimeoutError as error:
+            raise HTTPException(status_code=504, detail=str(error)) from error
+        except (ValueError, TimeoutError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @app.get("/api/v1/power-button")
+    async def power_button() -> dict:
+        return await supervisor.managers["power_button"].snapshot()
 
     @app.post("/api/v1/fans")
     async def update_fans(update: FanUpdate) -> dict:

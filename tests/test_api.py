@@ -38,6 +38,17 @@ async def test_read_only_api(monkeypatch):
             fans = await client.get("/api/v1/fans")
             assert fans.status_code == 200
             assert fans.json()["actual"]["led"]["output_enabled"] is False
+            lighting = await client.get("/api/v1/lighting")
+            assert lighting.status_code == 200
+            update_lighting = await client.post("/api/v1/lighting", json={
+                "enabled": False, "timezone": "Europe/Prague",
+                "windows": [{"start": "07:00", "end": "23:30", "days": ["mon"]}],
+            })
+            assert update_lighting.status_code == 200
+            assert update_lighting.json()["desired"]["timezone"] == "Europe/Prague"
+            power_button = await client.get("/api/v1/power-button")
+            assert power_button.status_code == 200
+            assert power_button.json()["desired"]["enabled"] is False
             assert (await client.post("/api/v1/fans", json={"mode": "on"})).status_code == 503
             update = await client.post("/api/v1/rgb", json={"enabled": False, "color": "#112233"})
             assert update.status_code == 503
@@ -52,3 +63,18 @@ async def test_read_only_api(monkeypatch):
             assert timeout.status_code == 504
     finally:
         await supervisor.stop()
+
+
+@pytest.mark.asyncio
+async def test_lighting_update_reports_hardware_failure(monkeypatch):
+    supervisor = Supervisor(AppConfig())
+
+    async def unavailable(*args, **kwargs):
+        raise RuntimeError("RGB unavailable")
+
+    monkeypatch.setattr(supervisor.commands, "dispatch", unavailable)
+    async with AsyncClient(transport=ASGITransport(app=create_app(supervisor)), base_url="http://test") as client:
+        response = await client.post("/api/v1/lighting", json={"enabled": False})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "RGB unavailable"

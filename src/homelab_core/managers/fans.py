@@ -19,7 +19,7 @@ class FanManager(Manager):
     name = "fans"
 
     def __init__(self, config: FansConfig, state: StateStore, device: FanDevice | None = None,
-                 temperature_reader: TemperatureReader | None = None) -> None:
+                 temperature_reader: TemperatureReader | None = None, schedule_allowed: bool = True) -> None:
         self.config = config
         self.state = state
         self.device = device
@@ -32,6 +32,7 @@ class FanManager(Manager):
         self._on_temperature_c = config.external.on_temperature_c
         self._off_temperature_c = config.external.off_temperature_c
         self._led_mode = config.led.mode
+        self._schedule_allowed = schedule_allowed
         self._fan_enabled = False
         self._led_enabled = False
         self._temperature_c: float | None = None
@@ -134,6 +135,26 @@ class FanManager(Manager):
             await self._publish()
             return await self._state()
 
+    async def set_schedule_allowed(self, allowed: bool) -> dict:
+        async with self._lock:
+            if allowed == self._schedule_allowed:
+                return await self._state()
+            led_enabled = self._resolve_led_state(self._fan_enabled) and allowed
+            try:
+                if self.device is not None and led_enabled != self._led_enabled:
+                    await self.device.set_led(led_enabled)
+                self._schedule_allowed = allowed
+                self._led_enabled = led_enabled
+                self._record_success("schedule")
+                self._status = ManagerStatus.READY
+            except Exception as error:
+                self._record_error("schedule", error)
+                self._status = ManagerStatus.DEGRADED
+                raise
+            finally:
+                await self._publish()
+            return await self._state()
+
     async def _poll(self) -> None:
         while True:
             await asyncio.sleep(self.config.poll_interval_seconds)
@@ -160,7 +181,7 @@ class FanManager(Manager):
                 self._temperature_c = None
             temperature_available = self._temperature_c is not None
         fan_enabled = True if not temperature_available else self._resolve_fan_state()
-        led_enabled = self._resolve_led_state(fan_enabled)
+        led_enabled = self._resolve_led_state(fan_enabled) and self._schedule_allowed
         if self.device is not None:
             if force or fan_enabled != self._fan_enabled:
                 await self.device.set_fan(fan_enabled)
@@ -215,7 +236,8 @@ class FanManager(Manager):
     async def _state(self) -> dict[str, Any]:
         return {"desired": {"enabled": self.config.enabled, "external": {"mode": self._mode,
                 "on_temperature_c": self._on_temperature_c, "off_temperature_c": self._off_temperature_c},
-                "led": {"mode": self._led_mode}}, "actual": {"temperature_celsius": self._temperature_c,
+                "led": {"mode": self._led_mode, "schedule_allowed": self._schedule_allowed,
+                "schedule_suppressed": self._resolve_led_state(self._fan_enabled) and not self._schedule_allowed}}, "actual": {"temperature_celsius": self._temperature_c,
                 "external": {"output_enabled": self._fan_enabled}, "led": {"output_enabled": self._led_enabled}},
                 "operation": {"last": self._last_operation, "at": self._last_operation_at,
                 "last_success_at": self._last_success_at, "last_error_at": self._last_error_at,
