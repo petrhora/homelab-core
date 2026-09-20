@@ -20,6 +20,7 @@ class SystemManager(Manager):
         self._task: asyncio.Task | None = None
         self._snapshot: dict[str, Any] = {}
         self._error: str | None = None
+        self._previous_cpu_times: tuple[Any, ...] | None = None
 
     async def start(self) -> None:
         try:
@@ -49,6 +50,15 @@ class SystemManager(Manager):
                 self._error = str(error)
                 self._status = ManagerStatus.DEGRADED
 
+    @staticmethod
+    def _cpu_mode_ratios(current: Any, previous: Any | None) -> dict[str, float]:
+        if previous is None:
+            return {field: 0.0 for field in current._fields}
+        deltas = {field: max(0.0, getattr(current, field) - getattr(previous, field))
+                  for field in current._fields}
+        total = sum(deltas.values())
+        return {field: value / total if total else 0.0 for field, value in deltas.items()}
+
     def _collect(self) -> dict[str, Any]:
         memory = psutil.virtual_memory()
         swap = psutil.swap_memory()
@@ -56,10 +66,16 @@ class SystemManager(Manager):
         cpu_times = psutil.cpu_times()
         cpu_times_per_core = psutil.cpu_times(percpu=True)
 
-        def cpu_mode_ratios(times: Any) -> dict[str, float]:
-            values = [getattr(times, name, 0.0) for name in ("user", "system", "idle")]
-            total = sum(getattr(times, field, 0.0) for field in times._fields)
-            return {name: value / total if total else 0.0 for name, value in zip(("user", "system", "idle"), values)}
+        current_cpu_times = (cpu_times, *cpu_times_per_core)
+        previous_cpu_times = self._previous_cpu_times
+        self._previous_cpu_times = current_cpu_times
+
+        cpu_mode_ratios_by_cpu = [self._cpu_mode_ratios(current, previous)
+                                  for current, previous in zip(current_cpu_times,
+                                                               previous_cpu_times or (None,) * len(current_cpu_times))]
+        total_modes = cpu_mode_ratios_by_cpu[0]
+        per_core_modes = cpu_mode_ratios_by_cpu[1:]
+        idle_ratio = total_modes.get("idle", 0.0)
 
         disks = []
         for disk in psutil.disk_partitions(all=False):
@@ -79,11 +95,10 @@ class SystemManager(Manager):
                                 for address in addresses]
         return {"collected_at": utc_now(), "hostname": platform.node(), "os": platform.platform(),
                 "kernel": platform.release(), "architecture": platform.machine(), "cpu_model": platform.processor(),
-                "cpu_cores": psutil.cpu_count(logical=True), "cpu_usage_ratio": psutil.cpu_percent() / 100,
-                 "cpu_per_core_usage_ratio": [value / 100 for value in psutil.cpu_percent(percpu=True)],
-                 "cpu_usage_ratio_by_mode": {"total": cpu_mode_ratios(cpu_times),
-                                              **{str(index): cpu_mode_ratios(times)
-                                                 for index, times in enumerate(cpu_times_per_core)}},
+                "cpu_cores": psutil.cpu_count(logical=True), "cpu_usage_ratio": 1.0 - idle_ratio,
+                 "cpu_per_core_usage_ratio": [1.0 - modes.get("idle", 0.0) for modes in per_core_modes],
+                 "cpu_usage_ratio_by_mode": {"total": total_modes,
+                                              **{str(index): modes for index, modes in enumerate(per_core_modes)}},
                  "cpu_frequency_hertz": cpu_frequency.current * 1_000_000 if cpu_frequency is not None else None,
                  "cpu_temperature_celsius": self._temperature(), "load_average": list(psutil.getloadavg()),
                  "uptime_seconds": time.time() - psutil.boot_time(), "memory": {"total_bytes": memory.total,

@@ -153,7 +153,7 @@ async def test_metrics_exports_system_telemetry_and_manager_errors(monkeypatch):
             "cpu_usage_ratio": 0.25,
             "cpu_per_core_usage_ratio": [0.1, 0.4],
             "cpu_usage_ratio_by_mode": {
-                "total": {"user": 0.2, "system": 0.05, "idle": 0.75},
+                "total": {"user": 0.2, "nice": 0.01, "system": 0.05, "idle": 0.74},
                 "0": {"user": 0.05, "system": 0.05, "idle": 0.9},
                 "1": {"user": 0.3, "system": 0.1, "idle": 0.6},
             },
@@ -186,6 +186,7 @@ async def test_metrics_exports_system_telemetry_and_manager_errors(monkeypatch):
     assert response.status_code == 200
     metrics = response.text
     assert 'homelab_cpu_usage_ratio{cpu="total",mode="user"} 0.2' in metrics
+    assert 'homelab_cpu_usage_ratio{cpu="total",mode="nice"} 0.01' in metrics
     assert 'homelab_cpu_usage_ratio{cpu="0",mode="system"} 0.05' in metrics
     assert "homelab_cpu_temperature_celsius 42.5" in metrics
     assert "homelab_cpu_frequency_hertz 1.5e+09" in metrics

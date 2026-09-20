@@ -4,6 +4,7 @@ import json
 import sys
 import time
 import types
+from collections import namedtuple
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -35,6 +36,22 @@ from homelab_core.runtime.state import StateStore
 from homelab_core.runtime.persistence import PersistenceStore
 from homelab_core.runtime.supervisor import Supervisor
 from homelab_core.runtime.system_actions import SystemctlActions
+
+
+def test_cpu_mode_ratios_use_interval_deltas():
+    cpu_times = namedtuple("cpu_times", "user nice system idle iowait irq softirq steal")
+    previous = cpu_times(100, 10, 20, 800, 5, 2, 3, 1)
+    current = cpu_times(110, 12, 25, 800, 5, 2, 3, 1)
+    manager = SystemManager(AppConfig().system, StateStore())
+
+    # The ratios are based on the five units elapsed, not lifetime totals.
+    ratios = manager._cpu_mode_ratios(current, previous)
+
+    assert ratios["user"] == pytest.approx(10 / 17)
+    assert ratios["system"] == pytest.approx(5 / 17)
+    assert ratios["nice"] == pytest.approx(2 / 17)
+    assert ratios["idle"] == 0
+    assert ratios["iowait"] == 0
 
 
 def test_default_config(tmp_path):

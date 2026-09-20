@@ -107,7 +107,7 @@ CPU (`cpu`, `mode`), load window (`window`), disk device (`device`), filesystem
 mountpoint (`mountpoint`), network interface (`interface`), fan (`fan`), and
 manager (`manager`). Available series are:
 
-- `homelab_cpu_usage_ratio{cpu="total|<index>",mode="user|system|idle"}`
+- `homelab_cpu_usage_ratio{cpu="total|<index>",mode="..."}` with all CPU modes reported by the host
 - `homelab_cpu_temperature_celsius` when the host exposes a temperature sensor
 - `homelab_cpu_frequency_hertz` when the host reports current CPU frequency
 - `homelab_memory_total_bytes`, `homelab_memory_used_bytes`, `homelab_memory_available_bytes`, `homelab_memory_cached_bytes`

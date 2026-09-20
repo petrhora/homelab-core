@@ -274,8 +274,8 @@ def create_app(supervisor: Supervisor, metrics_enabled: bool = True) -> FastAPI:
         memory = snapshot.get("memory", {})
         cpu_modes = snapshot.get("cpu_usage_ratio_by_mode", {})
         for cpu_name, modes in cpu_modes.items():
-            for mode in ("user", "system", "idle"):
-                cpu.labels(mode, str(cpu_name)).set(modes.get(mode, 0))
+            for mode, value in modes.items():
+                cpu.labels(str(mode), str(cpu_name)).set(value)
         if (temperature := snapshot.get("cpu_temperature_celsius")) is not None:
             cpu_temperature = Gauge("homelab_cpu_temperature_celsius", "CPU temperature in Celsius", registry=registry)
             cpu_temperature.set(temperature)
