@@ -1,6 +1,6 @@
 from typing import Annotated, Literal
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Gauge, generate_latest
@@ -148,14 +148,6 @@ def _validate_color(value: str) -> str:
 
 def create_app(supervisor: Supervisor, metrics_enabled: bool = True) -> FastAPI:
     app = FastAPI(title="homelab-core", version="0.1.0")
-    registry = CollectorRegistry()
-    cpu = Gauge("homelab_cpu_usage_ratio", "Overall CPU usage ratio", registry=registry)
-    memory_used = Gauge("homelab_memory_used_bytes", "Used memory", registry=registry)
-    memory_available = Gauge("homelab_memory_available_bytes", "Available memory", registry=registry)
-    rgb_enabled = Gauge("homelab_rgb_enabled", "Whether RGB output is enabled", registry=registry)
-    rgb_brightness = Gauge("homelab_rgb_brightness", "RGB brightness ratio", registry=registry)
-    fan_state = Gauge("homelab_fan_state", "Whether an external fan output is enabled", ["fan"], registry=registry)
-    manager_up = Gauge("homelab_manager_up", "Whether a manager is ready", ["manager"], registry=registry)
 
     @app.get("/api/v1/health")
     async def health() -> dict:
@@ -252,14 +244,65 @@ def create_app(supervisor: Supervisor, metrics_enabled: bool = True) -> FastAPI:
         return {"cleared": True, "effective_after_restart": True}
 
     @app.get("/metrics")
-    async def metrics(request: Request) -> Response:
+    async def metrics() -> Response:
         if not metrics_enabled:
             return Response(status_code=404)
+        # A registry per scrape ensures labels for detached mounts and network
+        # interfaces disappear as soon as they are absent from the snapshot.
+        registry = CollectorRegistry()
+        cpu = Gauge("homelab_cpu_usage_ratio", "CPU usage ratio by mode", ["mode", "cpu"], registry=registry)
+        memory_used = Gauge("homelab_memory_used_bytes", "Used memory", registry=registry)
+        memory_available = Gauge("homelab_memory_available_bytes", "Available memory", registry=registry)
+        memory_total = Gauge("homelab_memory_total_bytes", "Total memory", registry=registry)
+        memory_cached = Gauge("homelab_memory_cached_bytes", "Cached memory", registry=registry)
+        swap_used = Gauge("homelab_swap_used_bytes", "Used swap", registry=registry)
+        swap_total = Gauge("homelab_swap_total_bytes", "Total swap", registry=registry)
+        load_average = Gauge("homelab_load_average", "System load average", ["window"], registry=registry)
+        storage_used = Gauge("homelab_storage_used_bytes", "Used filesystem space", ["mountpoint"], registry=registry)
+        storage_free = Gauge("homelab_storage_free_bytes", "Free filesystem space", ["mountpoint"], registry=registry)
+        disk_read = Gauge("homelab_disk_read_bytes_total", "Disk bytes read", ["device"], registry=registry)
+        disk_write = Gauge("homelab_disk_write_bytes_total", "Disk bytes written", ["device"], registry=registry)
+        network_receive = Gauge("homelab_network_receive_bytes_total", "Network bytes received", ["interface"], registry=registry)
+        network_transmit = Gauge("homelab_network_transmit_bytes_total", "Network bytes transmitted", ["interface"], registry=registry)
+        rgb_enabled = Gauge("homelab_rgb_enabled", "Whether RGB output is enabled", registry=registry)
+        rgb_brightness = Gauge("homelab_rgb_brightness", "RGB brightness ratio", registry=registry)
+        fan_state = Gauge("homelab_fan_state", "Whether an external fan output is enabled", ["fan"], registry=registry)
+        manager_up = Gauge("homelab_manager_up", "Whether a manager is ready", ["manager"], registry=registry)
+        manager_errors = Gauge("homelab_manager_error_count", "Manager error count since process start", ["manager"], registry=registry)
+
         snapshot = await supervisor.managers["system"].snapshot()
         memory = snapshot.get("memory", {})
-        cpu.set(snapshot.get("cpu_usage_ratio", 0))
+        cpu_modes = snapshot.get("cpu_usage_ratio_by_mode", {})
+        for cpu_name, modes in cpu_modes.items():
+            for mode in ("user", "system", "idle"):
+                cpu.labels(mode, str(cpu_name)).set(modes.get(mode, 0))
+        if (temperature := snapshot.get("cpu_temperature_celsius")) is not None:
+            cpu_temperature = Gauge("homelab_cpu_temperature_celsius", "CPU temperature in Celsius", registry=registry)
+            cpu_temperature.set(temperature)
+        if (frequency := snapshot.get("cpu_frequency_hertz")) is not None:
+            cpu_frequency = Gauge("homelab_cpu_frequency_hertz", "Current CPU frequency in Hertz", registry=registry)
+            cpu_frequency.set(frequency)
         memory_used.set(memory.get("used_bytes", 0))
         memory_available.set(memory.get("available_bytes", 0))
+        memory_total.set(memory.get("total_bytes", 0))
+        memory_cached.set(memory.get("cached_bytes", 0))
+        swap = snapshot.get("swap", {})
+        swap_used.set(swap.get("used_bytes", 0))
+        swap_total.set(swap.get("total_bytes", 0))
+        for window, value in zip(("1m", "5m", "15m"), snapshot.get("load_average", [])):
+            load_average.labels(window).set(value)
+        for filesystem in snapshot.get("storage", []):
+            mountpoint = filesystem.get("mountpoint")
+            if not isinstance(mountpoint, str):
+                continue
+            storage_used.labels(mountpoint).set(filesystem.get("used_bytes", 0))
+            storage_free.labels(mountpoint).set(filesystem.get("free_bytes", 0))
+        for device, counters in snapshot.get("disk_io", {}).items():
+            disk_read.labels(device).set(counters.get("read_bytes", 0))
+            disk_write.labels(device).set(counters.get("write_bytes", 0))
+        for interface, counters in snapshot.get("network_io", {}).items():
+            network_receive.labels(interface).set(counters.get("receive_bytes", 0))
+            network_transmit.labels(interface).set(counters.get("transmit_bytes", 0))
         rgb_snapshot = await supervisor.managers["rgb"].snapshot()
         desired_rgb = rgb_snapshot.get("desired", {})
         rgb_enabled.set(1 if desired_rgb.get("enabled") else 0)
@@ -268,6 +311,7 @@ def create_app(supervisor: Supervisor, metrics_enabled: bool = True) -> FastAPI:
         fan_state.labels("external").set(1 if fan_snapshot.get("actual", {}).get("external", {}).get("output_enabled") else 0)
         for name, status in (await supervisor.health()).items():
             manager_up.labels(name).set(1 if status["status"] == "ready" else 0)
+            manager_errors.labels(name).set(status.get("error_count", 0))
         return Response(generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
 
     return app

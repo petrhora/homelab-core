@@ -100,6 +100,28 @@ updates, like RGB and fan API updates, are persisted in
 
 Run tests with `pytest`.
 
+## Prometheus Metrics
+
+`GET /metrics` exports current values from manager snapshots. Its stable labels are
+CPU (`cpu`, `mode`), load window (`window`), disk device (`device`), filesystem
+mountpoint (`mountpoint`), network interface (`interface`), fan (`fan`), and
+manager (`manager`). Available series are:
+
+- `homelab_cpu_usage_ratio{cpu="total|<index>",mode="user|system|idle"}`
+- `homelab_cpu_temperature_celsius` when the host exposes a temperature sensor
+- `homelab_cpu_frequency_hertz` when the host reports current CPU frequency
+- `homelab_memory_total_bytes`, `homelab_memory_used_bytes`, `homelab_memory_available_bytes`, `homelab_memory_cached_bytes`
+- `homelab_swap_used_bytes`, `homelab_swap_total_bytes`
+- `homelab_load_average{window="1m|5m|15m"}`
+- `homelab_storage_used_bytes`, `homelab_storage_free_bytes`
+- `homelab_disk_read_bytes_total{device="..."}`, `homelab_disk_write_bytes_total{device="..."}`
+- `homelab_network_receive_bytes_total`, `homelab_network_transmit_bytes_total`
+- `homelab_fan_state`, `homelab_rgb_enabled`, `homelab_rgb_brightness`
+- `homelab_manager_up`, `homelab_manager_error_count`
+
+Metrics are disabled with `metrics_enabled = false`. Docker and fan-RPM metrics
+will be added when those managers provide their underlying measurements.
+
 The physical power button is disabled by default. Enable it after verifying that Linux exposes an evdev device named `pwr_button`:
 
 ```toml

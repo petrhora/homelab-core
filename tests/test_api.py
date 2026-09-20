@@ -144,6 +144,81 @@ async def test_oled_api_update_is_persisted_and_restored(tmp_path):
         await restored.stop()
 
 
+@pytest.mark.asyncio
+async def test_metrics_exports_system_telemetry_and_manager_errors(monkeypatch):
+    supervisor = Supervisor(AppConfig())
+
+    async def system_snapshot():
+        return {
+            "cpu_usage_ratio": 0.25,
+            "cpu_per_core_usage_ratio": [0.1, 0.4],
+            "cpu_usage_ratio_by_mode": {
+                "total": {"user": 0.2, "system": 0.05, "idle": 0.75},
+                "0": {"user": 0.05, "system": 0.05, "idle": 0.9},
+                "1": {"user": 0.3, "system": 0.1, "idle": 0.6},
+            },
+            "cpu_temperature_celsius": 42.5,
+            "cpu_frequency_hertz": 1_500_000_000,
+            "memory": {"total_bytes": 1000, "used_bytes": 100, "available_bytes": 200, "cached_bytes": 50},
+            "swap": {"used_bytes": 60, "total_bytes": 500},
+            "load_average": [1.0, 0.5, 0.25],
+            "storage": [{"mountpoint": "/", "used_bytes": 300, "free_bytes": 400}],
+            "disk_io": {"sda": {"read_bytes": 700, "write_bytes": 800}},
+            "network_io": {"eth0": {"receive_bytes": 500, "transmit_bytes": 600}},
+        }
+
+    async def rgb_snapshot():
+        return {"desired": {"enabled": True, "brightness": 0.5}}
+
+    async def fan_snapshot():
+        return {"actual": {"external": {"output_enabled": True}}}
+
+    async def health():
+        return {"system": {"status": "ready", "error_count": 2}, "rgb": {"status": "degraded", "error_count": 3}}
+
+    monkeypatch.setattr(supervisor.managers["system"], "snapshot", system_snapshot)
+    monkeypatch.setattr(supervisor.managers["rgb"], "snapshot", rgb_snapshot)
+    monkeypatch.setattr(supervisor.managers["fans"], "snapshot", fan_snapshot)
+    monkeypatch.setattr(supervisor, "health", health)
+    async with AsyncClient(transport=ASGITransport(app=create_app(supervisor)), base_url="http://test") as client:
+        response = await client.get("/metrics")
+
+    assert response.status_code == 200
+    metrics = response.text
+    assert 'homelab_cpu_usage_ratio{cpu="total",mode="user"} 0.2' in metrics
+    assert 'homelab_cpu_usage_ratio{cpu="0",mode="system"} 0.05' in metrics
+    assert "homelab_cpu_temperature_celsius 42.5" in metrics
+    assert "homelab_cpu_frequency_hertz 1.5e+09" in metrics
+    assert "homelab_memory_total_bytes 1000.0" in metrics
+    assert "homelab_memory_cached_bytes 50.0" in metrics
+    assert "homelab_swap_used_bytes 60.0" in metrics
+    assert "homelab_swap_total_bytes 500.0" in metrics
+    assert 'homelab_load_average{window="1m"} 1.0' in metrics
+    assert 'homelab_load_average{window="15m"} 0.25' in metrics
+    assert 'homelab_storage_used_bytes{mountpoint="/"} 300.0' in metrics
+    assert 'homelab_disk_read_bytes_total{device="sda"} 700.0' in metrics
+    assert 'homelab_disk_write_bytes_total{device="sda"} 800.0' in metrics
+    assert 'homelab_network_receive_bytes_total{interface="eth0"} 500.0' in metrics
+    assert 'homelab_fan_state{fan="external"} 1.0' in metrics
+    assert 'homelab_manager_up{manager="rgb"} 0.0' in metrics
+    assert 'homelab_manager_error_count{manager="system"} 2.0' in metrics
+
+
+@pytest.mark.asyncio
+async def test_metrics_omits_unavailable_cpu_measurements(monkeypatch):
+    supervisor = Supervisor(AppConfig())
+
+    async def system_snapshot():
+        return {"memory": {}, "storage": [], "network_io": {}}
+
+    monkeypatch.setattr(supervisor.managers["system"], "snapshot", system_snapshot)
+    async with AsyncClient(transport=ASGITransport(app=create_app(supervisor)), base_url="http://test") as client:
+        response = await client.get("/metrics")
+
+    assert "homelab_cpu_temperature_celsius" not in response.text
+    assert "homelab_cpu_frequency_hertz" not in response.text
+
+
 @pytest.mark.parametrize("pattern", [
     {"type": "flow", "pixels": ["#FFFFFF"] * 1025},
     {"type": "gradient", "colors": ["#FFFFFF"] * 1025},

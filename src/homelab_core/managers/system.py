@@ -51,6 +51,16 @@ class SystemManager(Manager):
 
     def _collect(self) -> dict[str, Any]:
         memory = psutil.virtual_memory()
+        swap = psutil.swap_memory()
+        cpu_frequency = psutil.cpu_freq()
+        cpu_times = psutil.cpu_times()
+        cpu_times_per_core = psutil.cpu_times(percpu=True)
+
+        def cpu_mode_ratios(times: Any) -> dict[str, float]:
+            values = [getattr(times, name, 0.0) for name in ("user", "system", "idle")]
+            total = sum(getattr(times, field, 0.0) for field in times._fields)
+            return {name: value / total if total else 0.0 for name, value in zip(("user", "system", "idle"), values)}
+
         disks = []
         for disk in psutil.disk_partitions(all=False):
             try:
@@ -60,6 +70,8 @@ class SystemManager(Manager):
             disks.append({"device": disk.device, "mountpoint": disk.mountpoint, "fstype": disk.fstype,
                           "total_bytes": usage.total, "used_bytes": usage.used, "free_bytes": usage.free,
                           "used_ratio": usage.percent / 100})
+        disk_io = {name: {"read_bytes": value.read_bytes, "write_bytes": value.write_bytes}
+                   for name, value in psutil.disk_io_counters(perdisk=True).items()}
         interfaces = {}
         for name, addresses in psutil.net_if_addrs().items():
             interfaces[name] = [{"family": str(address.family), "address": address.address,
@@ -68,11 +80,17 @@ class SystemManager(Manager):
         return {"collected_at": utc_now(), "hostname": platform.node(), "os": platform.platform(),
                 "kernel": platform.release(), "architecture": platform.machine(), "cpu_model": platform.processor(),
                 "cpu_cores": psutil.cpu_count(logical=True), "cpu_usage_ratio": psutil.cpu_percent() / 100,
-                "cpu_per_core_usage_ratio": [value / 100 for value in psutil.cpu_percent(percpu=True)],
-                "cpu_temperature_celsius": self._temperature(), "load_average": list(psutil.getloadavg()),
-                "uptime_seconds": time.time() - psutil.boot_time(), "memory": {"total_bytes": memory.total,
-                "used_bytes": memory.used, "available_bytes": memory.available, "used_ratio": memory.percent / 100},
-                "storage": disks, "network_interfaces": interfaces,
+                 "cpu_per_core_usage_ratio": [value / 100 for value in psutil.cpu_percent(percpu=True)],
+                 "cpu_usage_ratio_by_mode": {"total": cpu_mode_ratios(cpu_times),
+                                              **{str(index): cpu_mode_ratios(times)
+                                                 for index, times in enumerate(cpu_times_per_core)}},
+                 "cpu_frequency_hertz": cpu_frequency.current * 1_000_000 if cpu_frequency is not None else None,
+                 "cpu_temperature_celsius": self._temperature(), "load_average": list(psutil.getloadavg()),
+                 "uptime_seconds": time.time() - psutil.boot_time(), "memory": {"total_bytes": memory.total,
+                 "used_bytes": memory.used, "available_bytes": memory.available, "cached_bytes": memory.cached,
+                 "used_ratio": memory.percent / 100},
+                 "swap": {"used_bytes": swap.used, "total_bytes": swap.total},
+                 "storage": disks, "disk_io": disk_io, "network_interfaces": interfaces,
                 "network_io": {name: {"receive_bytes": value.bytes_recv, "transmit_bytes": value.bytes_sent}
                                for name, value in psutil.net_io_counters(pernic=True).items()}}
 
