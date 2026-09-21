@@ -163,12 +163,12 @@ async def test_power_button_prepares_hardware_before_shutdown():
 
     actions.shutdown = shutdown
     manager = PowerButtonManager(
-        PowerButtonConfig(enabled=True, debounce_ms=0, long_press_ms=1),
+        PowerButtonConfig(enabled=True, debounce_ms=0, long_press_ms=500),
         StateStore(), events, device, actions, prepare,
     )
     await manager.start()
     await device.press()
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0.55)
 
     assert order == ["shutdown", "poweroff"]
     await manager.stop()

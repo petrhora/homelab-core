@@ -21,13 +21,13 @@ class SystemManager(Manager):
         self._snapshot: dict[str, Any] = {}
         self._error: str | None = None
         self._previous_cpu_times: tuple[Any, ...] | None = None
+        self._collection_lock = asyncio.Lock()
 
     async def start(self) -> None:
+        self._task = asyncio.create_task(self._poll(), name="system-poll")
         try:
-            self._snapshot = await asyncio.to_thread(self._collect)
-            await self.state.update(self.name, self._snapshot)
+            await self._collect_and_publish()
             self._status = ManagerStatus.READY
-            self._task = asyncio.create_task(self._poll(), name="system-poll")
         except Exception as error:
             self._error = str(error)
             self._status = ManagerStatus.DEGRADED
@@ -42,13 +42,19 @@ class SystemManager(Manager):
         while True:
             await asyncio.sleep(self.config.poll_interval_seconds)
             try:
-                self._snapshot = await asyncio.to_thread(self._collect)
-                await self.state.update(self.name, self._snapshot)
+                await self._collect_and_publish()
                 self._error = None
                 self._status = ManagerStatus.READY
             except Exception as error:
                 self._error = str(error)
                 self._status = ManagerStatus.DEGRADED
+
+    async def _collect_and_publish(self) -> dict[str, Any]:
+        async with self._collection_lock:
+            snapshot = await asyncio.to_thread(self._collect)
+            self._snapshot = snapshot
+            await self.state.update(self.name, snapshot)
+            return snapshot
 
     @staticmethod
     def _cpu_mode_ratios(current: Any, previous: Any | None) -> dict[str, float]:
@@ -93,16 +99,19 @@ class SystemManager(Manager):
             interfaces[name] = [{"family": str(address.family), "address": address.address,
                                  "netmask": address.netmask, "mac": address.address if address.family == psutil.AF_LINK else None}
                                 for address in addresses]
+        cpu_per_core = []
+        for index, modes in enumerate(per_core_modes):
+            cpu_per_core.append({"index": index, "usage_ratio": 1.0 - modes.get("idle", 0.0),
+                                 "usage_ratio_by_mode": modes})
         return {"collected_at": utc_now(), "hostname": platform.node(), "os": platform.platform(),
                 "kernel": platform.release(), "architecture": platform.machine(), "cpu_model": platform.processor(),
                 "cpu_cores": psutil.cpu_count(logical=True), "cpu_usage_ratio": 1.0 - idle_ratio,
-                 "cpu_per_core_usage_ratio": [1.0 - modes.get("idle", 0.0) for modes in per_core_modes],
-                 "cpu_usage_ratio_by_mode": {"total": total_modes,
-                                              **{str(index): modes for index, modes in enumerate(per_core_modes)}},
-                 "cpu_frequency_hertz": cpu_frequency.current * 1_000_000 if cpu_frequency is not None else None,
-                 "cpu_temperature_celsius": self._temperature(), "load_average": list(psutil.getloadavg()),
+                 "cpu_per_core": cpu_per_core, "cpu_usage_ratio_by_mode": {"total": total_modes},
+                  "cpu_frequency_hertz": cpu_frequency.current * 1_000_000 if cpu_frequency is not None else None,
+                  "cpu_temperature_celsius": self._temperature(), "load_average": list(psutil.getloadavg()),
                  "uptime_seconds": time.time() - psutil.boot_time(), "memory": {"total_bytes": memory.total,
-                 "used_bytes": memory.used, "available_bytes": memory.available, "cached_bytes": memory.cached,
+                  "used_bytes": memory.used, "available_bytes": memory.available,
+                  "cached_bytes": getattr(memory, "cached", 0),
                  "used_ratio": memory.percent / 100},
                  "swap": {"used_bytes": swap.used, "total_bytes": swap.total},
                  "storage": disks, "disk_io": disk_io, "network_interfaces": interfaces,
@@ -124,6 +133,17 @@ class SystemManager(Manager):
 
     async def snapshot(self) -> dict:
         return self._snapshot
+
+    async def collect_now(self) -> dict[str, Any]:
+        try:
+            snapshot = await self._collect_and_publish()
+        except Exception as error:
+            self._error = str(error)
+            self._status = ManagerStatus.DEGRADED
+            raise
+        self._error = None
+        self._status = ManagerStatus.READY
+        return snapshot
 
     async def processes(self, offset: int = 0, limit: int = 100) -> dict[str, Any]:
         processes = []

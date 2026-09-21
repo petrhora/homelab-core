@@ -134,14 +134,17 @@ class LightingManager(Manager):
     def _is_allowed(self, now: datetime) -> bool:
         if not self.config.enabled:
             return True
+        timezone = now.tzinfo
+        if timezone is None:
+            raise ValueError("lighting schedule requires a timezone-aware datetime")
         for day_offset in (0, -1):
             window_date = now.date() + timedelta(days=day_offset)
             for window in self.config.windows:
                 if WEEKDAYS[window_date.weekday()] not in window.days:
                     continue
                 start, end = _parse_time(window.start), _parse_time(window.end)
-                starts_at = _local_datetime(window_date, start, now.tzinfo)
-                ends_at = _local_datetime(window_date + timedelta(days=start > end), end, now.tzinfo)
+                starts_at = _local_datetime(window_date, start, timezone)
+                ends_at = _local_datetime(window_date + timedelta(days=start > end), end, timezone)
                 if starts_at.timestamp() <= now.timestamp() < ends_at.timestamp():
                     return True
         return False
@@ -149,15 +152,18 @@ class LightingManager(Manager):
     def _find_next_transition(self, now: datetime) -> datetime | None:
         if not self.config.enabled or not self.config.windows:
             return None
+        timezone = now.tzinfo
+        if timezone is None:
+            raise ValueError("lighting schedule requires a timezone-aware datetime")
         transitions: list[datetime] = []
         for day_offset in range(8):
             date = now.date() + timedelta(days=day_offset)
             for window in self.config.windows:
                 if WEEKDAYS[date.weekday()] not in window.days:
                     continue
-                start = _local_datetime(date, _parse_time(window.start), now.tzinfo)
+                start = _local_datetime(date, _parse_time(window.start), timezone)
                 end_date = date + timedelta(days=1) if _parse_time(window.end) < _parse_time(window.start) else date
-                end = _local_datetime(end_date, _parse_time(window.end), now.tzinfo)
+                end = _local_datetime(end_date, _parse_time(window.end), timezone)
                 transitions.extend(transition for transition in (start, end) if transition.timestamp() > now.timestamp())
         return min(transitions, default=None)
 

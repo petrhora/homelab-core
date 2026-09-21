@@ -51,8 +51,8 @@ class FanManager(Manager):
             try:
                 temperature_available = True
                 if self.config.enabled:
-                    temperature_available = await self._refresh("start", force=True)
                     self._task = asyncio.create_task(self._poll(), name="fans-poll")
+                    temperature_available = await self._refresh("start", force=True)
                 if temperature_available:
                     self._record_success("start")
                     self._status = ManagerStatus.READY
@@ -206,9 +206,12 @@ class FanManager(Manager):
             return False
         if self._mode == "on":
             return True
+        temperature = self._temperature_c
+        if temperature is None:
+            return True
         if self._fan_enabled:
-            return self._temperature_c > self._off_temperature_c
-        return self._temperature_c >= self._on_temperature_c
+            return temperature > self._off_temperature_c
+        return temperature >= self._on_temperature_c
 
     def _resolve_led_state(self, fan_enabled: bool) -> bool:
         if self._led_mode == "on":

@@ -161,6 +161,13 @@ def create_app(supervisor: Supervisor, metrics_enabled: bool = True) -> FastAPI:
     async def system() -> dict:
         return await supervisor.managers["system"].snapshot()
 
+    @app.get("/api/v1/system/instant")
+    async def instant_system() -> dict:
+        try:
+            return await supervisor.managers["system"].collect_now()  # type: ignore[attr-defined]
+        except Exception as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
     @app.get("/api/v1/system/processes")
     async def processes(offset: int = Query(default=0, ge=0, le=10_000),
                        limit: int = Query(default=100, ge=1, le=500)) -> dict:
@@ -272,7 +279,9 @@ def create_app(supervisor: Supervisor, metrics_enabled: bool = True) -> FastAPI:
 
         snapshot = await supervisor.managers["system"].snapshot()
         memory = snapshot.get("memory", {})
-        cpu_modes = snapshot.get("cpu_usage_ratio_by_mode", {})
+        cpu_modes = {"total": snapshot.get("cpu_usage_ratio_by_mode", {}).get("total", {})}
+        cpu_modes.update({str(core.get("index", index)): core.get("usage_ratio_by_mode", {})
+                          for index, core in enumerate(snapshot.get("cpu_per_core", []))})
         for cpu_name, modes in cpu_modes.items():
             for mode, value in modes.items():
                 cpu.labels(str(mode), str(cpu_name)).set(value)

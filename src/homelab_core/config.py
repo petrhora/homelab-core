@@ -16,7 +16,7 @@ Weekday = Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 class ApiConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     host: str = "127.0.0.1"
-    port: int = Field(default=8000, ge=1, le=65535)
+    port: int = Field(default=2465, ge=1, le=65535)
 
 
 class LoggingConfig(BaseModel):

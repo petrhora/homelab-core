@@ -165,7 +165,7 @@ async def test_oled_failed_command_preserves_desired_state():
     with pytest.raises(RuntimeError, match="I2C unavailable"):
         await manager.execute(Command("oled.update", "oled-device", {"sleep_timeout_seconds": 30}, "test", 1))
 
-    assert (await manager.snapshot())["desired"]["sleep_timeout_seconds"] == 0
+    assert (await manager.snapshot())["desired"]["sleep_timeout_seconds"] == 15
     original_shutdown_duration = oled_module.SHUTDOWN_SCREEN_SECONDS
     oled_module.SHUTDOWN_SCREEN_SECONDS = 0
     try:
@@ -517,6 +517,32 @@ async def test_fans_force_on_and_recover_after_temperature_sensor_failure():
 
 
 @pytest.mark.asyncio
+async def test_fans_polling_recovers_after_initial_gpio_failure():
+    class FailingFanDevice(FakeFanDevice):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_first_write = True
+
+        async def set_fan(self, enabled: bool) -> None:
+            if enabled and self.fail_first_write:
+                self.fail_first_write = False
+                raise RuntimeError("GPIO write failed")
+            await super().set_fan(enabled)
+
+    config = FansConfig(enabled=True, poll_interval_seconds=0.001,
+                        external=ExternalFanConfig(mode="on"), led=FanLedConfig(mode="off"))
+    device = FailingFanDevice()
+    manager = FanManager(config, StateStore(), device)
+    await manager.start()
+
+    assert (await manager.health())["status"] == "degraded"
+    while (await manager.health())["status"] != "ready":
+        await asyncio.sleep(0)
+    assert device.fan_enabled is True
+    await manager.stop()
+
+
+@pytest.mark.asyncio
 async def test_fans_manual_off_does_not_depend_on_temperature_sensor():
     async def unavailable_temperature():
         raise AssertionError("manual fan mode must not read the temperature sensor")
@@ -649,6 +675,34 @@ async def test_system_health_recovers_after_transient_poll_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_system_polling_recovers_after_initial_collection_failure(monkeypatch):
+    config = AppConfig().system.model_copy(update={"poll_interval_seconds": 0.001})
+    manager = SystemManager(config, StateStore())
+    calls = 0
+
+    def collect():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("initial system collection failure")
+        return {"collection": calls}
+
+    monkeypatch.setattr(manager, "_collect", collect)
+    await manager.start()
+
+    assert (await manager.health())["status"] == "degraded"
+    assert await manager.collect_now() == {"collection": 2}
+
+    async def wait_for_scheduled_collection():
+        while calls < 3:
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(wait_for_scheduled_collection(), 1)
+    assert (await manager.health())["status"] == "ready"
+    await manager.stop()
+
+
+@pytest.mark.asyncio
 async def test_system_collection_does_not_block_event_loop(monkeypatch):
     manager = SystemManager(AppConfig().system, StateStore())
 
@@ -672,6 +726,18 @@ async def test_system_collection_does_not_block_event_loop(monkeypatch):
 
     assert progress > 0
     await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_system_collect_now_publishes_fresh_snapshot(monkeypatch):
+    manager = SystemManager(AppConfig().system, StateStore())
+    snapshot = {"collection": "instant"}
+    monkeypatch.setattr(manager, "_collect", lambda: snapshot)
+
+    assert await manager.collect_now() == snapshot
+    assert await manager.snapshot() == snapshot
+    assert (await manager.state.snapshot())["system"] == snapshot
+    assert (await manager.health())["status"] == "ready"
 
 
 @pytest.mark.asyncio

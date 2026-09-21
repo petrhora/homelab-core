@@ -14,7 +14,7 @@ class PowerButtonDevice:
     async def open(self) -> None:
         raise NotImplementedError
 
-    async def events(self) -> AsyncIterator[ButtonInputEvent]:
+    def events(self) -> AsyncIterator[ButtonInputEvent]:
         raise NotImplementedError
 
     async def close(self) -> None:
@@ -49,7 +49,10 @@ class EvdevPowerButtonDevice(PowerButtonDevice):
             device.close()
         raise RuntimeError(f"Power button device {self.name!r} was not found")
 
-    async def events(self) -> AsyncIterator[ButtonInputEvent]:
+    def events(self) -> AsyncIterator[ButtonInputEvent]:
+        return self._events()
+
+    async def _events(self) -> AsyncIterator[ButtonInputEvent]:
         if self._device is None:
             raise RuntimeError("Power button device is not open")
         from evdev import ecodes
@@ -77,7 +80,10 @@ class FakePowerButtonDevice(PowerButtonDevice):
     async def open(self) -> None:
         self.opened = True
 
-    async def events(self) -> AsyncIterator[ButtonInputEvent]:
+    def events(self) -> AsyncIterator[ButtonInputEvent]:
+        return self._events()
+
+    async def _events(self) -> AsyncIterator[ButtonInputEvent]:
         while True:
             event = await self.events_queue.get()
             if event is None:

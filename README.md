@@ -16,6 +16,7 @@ Endpoints are available at `http://127.0.0.1:8000`:
 - `GET /api/v1/health`
 - `GET /api/v1/overview`
 - `GET /api/v1/system`
+- `GET /api/v1/system/instant`
 - `GET /api/v1/system/processes`
 - `GET /api/v1/rgb`
 - `POST /api/v1/rgb`

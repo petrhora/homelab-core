@@ -23,6 +23,15 @@ async def test_read_only_api(monkeypatch, tmp_path):
             assert response.json()["managers"]["system"]["status"] == "ready"
             assert response.json()["managers"]["rgb"]["status"] == "degraded"
             assert (await client.get("/api/v1/overview")).status_code == 200
+
+            async def instant_system():
+                return {"collected_at": "now", "hostname": "test-host"}
+
+            monkeypatch.setattr(supervisor.managers["system"], "collect_now", instant_system)
+            instant = await client.get("/api/v1/system/instant")
+            assert instant.status_code == 200
+            assert instant.json() == {"collected_at": "now", "hostname": "test-host"}
+
             async def process_page(offset, limit):
                 return {"items": [{"pid": 2, "name": "demo", "status": "running", "username": "user"}],
                         "offset": offset, "limit": limit, "has_more": False}
@@ -151,11 +160,14 @@ async def test_metrics_exports_system_telemetry_and_manager_errors(monkeypatch):
     async def system_snapshot():
         return {
             "cpu_usage_ratio": 0.25,
-            "cpu_per_core_usage_ratio": [0.1, 0.4],
+            "cpu_per_core": [
+                {"index": 0, "usage_ratio": 0.1,
+                 "usage_ratio_by_mode": {"user": 0.05, "system": 0.05, "idle": 0.9}},
+                {"index": 1, "usage_ratio": 0.4,
+                 "usage_ratio_by_mode": {"user": 0.3, "system": 0.1, "idle": 0.6}},
+            ],
             "cpu_usage_ratio_by_mode": {
                 "total": {"user": 0.2, "nice": 0.01, "system": 0.05, "idle": 0.74},
-                "0": {"user": 0.05, "system": 0.05, "idle": 0.9},
-                "1": {"user": 0.3, "system": 0.1, "idle": 0.6},
             },
             "cpu_temperature_celsius": 42.5,
             "cpu_frequency_hertz": 1_500_000_000,
